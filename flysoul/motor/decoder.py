@@ -66,15 +66,19 @@ class MotorDecoder:
         if melee_window and (np.random.random() < 0.28):
             rates["attack_light"] = max(rates.get("attack_light", 0.0), 1.8)
 
+        # Approach drive: if far from enemy (>3.0m), actively close distance to engage in combat
+        approach_drive = float(np.clip((distance - 2.5) * 0.45, 0.0, 2.2))
+        forward_score = (rates.get("turn_left", 0.0) + rates.get("turn_right", 0.0)) * 0.8 + approach_drive
+
         # Score the discrete actions
         action_scores = np.array([
-            0.5,                                       # 0: Idle baseline
+            0.4,                                       # 0: Idle baseline
             rates.get("dodge_roll", 0.0) * (1.6 if boss_attacking else 1.1),  # 1: Escape / dodge roll
             rates.get("attack_light", 0.0) * (1.5 if melee_window else 0.9),  # 2: Light attack
             rates.get("attack_heavy", 0.0) * (1.2 if melee_window else 0.8),  # 3: Heavy attack
             rates.get("block_parry", 0.0) * (1.3 if boss_attacking else 0.8),  # 4: Block / parry
             rates.get("step_back", 0.0) * (1.2 if boss_attacking else 0.8),    # 5: Step back
-            (rates.get("turn_left", 0.0) + rates.get("turn_right", 0.0)) * 0.8,  # 6: Forward advance
+            forward_score,                             # 6: Forward advance / approach target
         ], dtype=np.float32)
 
         if explore:

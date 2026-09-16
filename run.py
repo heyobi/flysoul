@@ -95,6 +95,30 @@ def parse_args():
     return parser.parse_args()
 
 
+def release_all_keys():
+    """Safely release all pressed movement and combat keys in X11 so player never gets stuck."""
+    try:
+        import ctypes
+        x11 = ctypes.CDLL("libX11.so.6")
+        xtest = ctypes.CDLL("libXtst.so.6")
+        disp = x11.XOpenDisplay(None)
+        if disp:
+            key_names = [
+                "w", "a", "s", "d", "q", "e", "r", "f", "c", "v", "x", "z", "g",
+                "space", "Shift_L", "Control_L", "Alt_L"
+            ]
+            for k in key_names:
+                sym = x11.XStringToKeysym(k.encode("ascii"))
+                if sym != 0:
+                    kc = x11.XKeysymToKeycode(disp, sym)
+                    if kc != 0:
+                        xtest.XTestFakeKeyEvent(disp, kc, False, 0)
+            x11.XFlush(disp)
+            x11.XCloseDisplay(disp)
+    except Exception:
+        pass
+
+
 def extract_combat_metrics(obs, info):
     """Extract normalized telemetry values from SoulsGym or Mock environment observations."""
     def _safe_float(v, default=0.0) -> float:
@@ -111,9 +135,22 @@ def extract_combat_metrics(obs, info):
         p_max = max(1.0, _safe_float(obs.get("player_max_hp"), 1000.0))
         b_max = max(1.0, _safe_float(obs.get("boss_max_hp"), 1037.0))
         player_hp_pct = float(np.clip(_safe_float(obs.get("player_hp")) / p_max, 0.0, 1.0))
-        player_sp_pct = float(np.clip(_safe_float(obs.get("player_sp"), 100.0) / 100.0, 0.0, 1.0))
+
+        raw_sp = _safe_float(obs.get("player_sp"), 100.0)
+        p_max_sp = _safe_float(obs.get("player_max_sp"), 0.0)
+        if p_max_sp > 1.0:
+            player_sp_pct = float(np.clip(raw_sp / p_max_sp, 0.0, 1.0))
+        elif raw_sp > 1.0:
+            player_sp_pct = float(np.clip(raw_sp / 100.0, 0.0, 1.0))
+        else:
+            player_sp_pct = float(np.clip(raw_sp, 0.0, 1.0))
+
         boss_hp_pct = float(np.clip(_safe_float(obs.get("boss_hp")) / b_max, 0.0, 1.0))
-        boss_attacking = bool(obs.get("boss_animation", -1) > 0 or obs.get("boss_attacking", False))
+        boss_anim = obs.get("boss_animation", -1)
+        if isinstance(boss_anim, str):
+            boss_attacking = "attack" in boss_anim.lower()
+        else:
+            boss_attacking = bool(boss_anim > 0 or obs.get("boss_attacking", False))
     elif isinstance(obs, dict):
         player_hp_pct = float(np.clip(_safe_float(obs.get("player_hp"), 1.0), 0.0, 1.0))
         player_sp_pct = float(np.clip(_safe_float(obs.get("player_sp"), 1.0), 0.0, 1.0))
@@ -182,7 +219,26 @@ def main():
     ep = 0
     while ep < total_episodes:
         ep += 1
-        obs, _ = env.reset()
+        release_all_keys()
+        reset_ok = False
+        for r_attempt in range(5):
+            try:
+                obs, _ = env.reset()
+                reset_ok = True
+                break
+            except Exception as e:
+                console.print(f"[yellow]⚠️ env.reset() retry {r_attempt+1}/5: {e}[/yellow]")
+                release_all_keys()
+                time.sleep(1.2)
+        if not reset_ok:
+            console.print("[bold yellow]⚠️ Re-initializing environment after reset failure...[/bold yellow]")
+            try:
+                env.close()
+            except Exception:
+                pass
+            env = make_souls_env(use_mock=use_mock)
+            obs, _ = env.reset()
+
         engine.reset_state()
         encoder.reset()
         plasticity.reset()
@@ -378,6 +434,7 @@ def main():
                 f"[bold red]💀 EPISODE #{ep} YOU DIED.[/bold red] "
                 f"Remaining Boss HP: {boss_hp_raw} | Steps: {step} | Reward: {ep_reward:+.2f}"
             )
+        release_all_keys()
 
     console.print(
         f"\n[bold cyan]🏁 Simulation Finished.[/bold cyan] "

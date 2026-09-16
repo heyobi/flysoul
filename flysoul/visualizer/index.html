@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>FlySoul: MaleCNS v1.0 Fruit Fly Connectome vs Dark Souls III</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -23,7 +23,7 @@
 
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
     body { background: var(--bg-dark); color: var(--text-main); overflow: hidden; width: 100vw; height: 100vh; }
-    #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
+    #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; touch-action: none; }
 
     /* Glassmorphic Panels */
     .hud-panel {
@@ -37,6 +37,7 @@
       padding: 14px 18px;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
       pointer-events: auto;
+      transition: opacity 0.2s ease, transform 0.2s ease;
     }
 
     /* Top Left: Header & Camera Controls */
@@ -49,17 +50,18 @@
       display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600;
       text-transform: uppercase; padding: 3px 8px; border-radius: 9999px;
       background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: var(--lime);
+      white-space: nowrap;
     }
     .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 8px var(--lime); animation: pulse 1.8s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
 
     .subtitle { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
     
-    .cam-controls { display: flex; gap: 6px; margin-top: 10px; }
+    .cam-controls { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
     .cam-btn {
       background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3);
       color: var(--cyan); border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 600;
-      cursor: pointer; transition: all 0.2s;
+      cursor: pointer; transition: all 0.2s; -webkit-tap-highlight-color: transparent;
     }
     .cam-btn:hover { background: rgba(56, 189, 248, 0.25); border-color: var(--cyan); }
     .cam-btn.active { background: var(--cyan); color: #000; }
@@ -130,9 +132,202 @@
     .action-bar-track { width: 100%; height: 10px; border-radius: 5px; display: flex; overflow: hidden; background: rgba(255,255,255,0.06); }
     .act-segment { height: 100%; transition: width 0.3s; }
     .act-legend { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+
+    /* Mobile Navigation Bar */
+    #mobile-nav-bar {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100vw;
+      height: 62px;
+      background: rgba(6, 10, 18, 0.95);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-top: 1px solid rgba(56, 189, 248, 0.28);
+      z-index: 1000;
+      grid-template-columns: repeat(4, 1fr);
+      align-items: center;
+      box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.8);
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    .mobile-tab-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      height: 100%;
+      cursor: pointer;
+      transition: all 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .mobile-tab-btn .tab-icon {
+      font-size: 19px;
+      transition: transform 0.2s, filter 0.2s;
+    }
+    .mobile-tab-btn.active {
+      color: var(--cyan);
+    }
+    .mobile-tab-btn.active .tab-icon {
+      transform: scale(1.18);
+      filter: drop-shadow(0 0 10px rgba(0, 240, 255, 0.7));
+    }
+
+    /* ============================================================
+       Responsive Breakpoint for Mobile & Tablets (<= 860px)
+       ============================================================ */
+    @media (max-width: 860px) {
+      body {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        height: auto !important;
+        min-height: 100vh;
+      }
+      #mobile-nav-bar {
+        display: grid !important;
+      }
+
+      /* On mobile, canvas stays in fixed background */
+      #canvas-container {
+        position: fixed !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        top: 0;
+        left: 0;
+        z-index: 0 !important;
+      }
+
+      /* Mobile layout defaults for panels */
+      .hud-panel {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        transform: none !important;
+        width: calc(100vw - 20px) !important;
+        max-width: 100% !important;
+        margin: 10px auto !important;
+        border-radius: 12px;
+      }
+
+      /* Mobile Header: Compact */
+      #header-panel {
+        padding: 10px 14px !important;
+        margin-top: 8px !important;
+      }
+      #header-panel .subtitle {
+        display: none; /* Keep clean on small screens */
+      }
+
+      /* Game Feed Panel on mobile */
+      #game-feed-panel {
+        margin-top: 8px !important;
+        padding: 12px 14px !important;
+      }
+      #game-feed-body {
+        height: auto !important;
+        aspect-ratio: 16 / 9 !important;
+      }
+
+      /* Center Action Badge on mobile */
+      #action-badge-panel {
+        margin: 8px auto !important;
+        padding: 8px 16px !important;
+      }
+      #action-name {
+        font-size: 18px !important;
+      }
+
+      /* Combat Stats Grid */
+      #combat-panel {
+        padding: 12px 14px !important;
+      }
+
+      /* Progress Charts: Stacked cards on mobile */
+      #progress-panel {
+        padding: 12px 14px !important;
+        margin-bottom: 74px !important;
+      }
+      .chart-row {
+        grid-template-columns: 1fr !important;
+        gap: 8px !important;
+      }
+      canvas.mini-chart {
+        height: 90px !important;
+      }
+      .act-legend {
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      /* Anatomy Panel on mobile */
+      #anatomy-panel {
+        padding: 12px 14px !important;
+        margin-bottom: 74px !important;
+      }
+      .neuropil-list {
+        grid-template-columns: 1fr !important;
+        gap: 4px !important;
+      }
+
+      /* Mobile Tab Visibility Control */
+      body[data-mobile-tab="combat"] #header-panel { display: block !important; }
+      body[data-mobile-tab="combat"] #header-panel .cam-controls { display: none !important; }
+      body[data-mobile-tab="combat"] #game-feed-panel { display: block !important; }
+      body[data-mobile-tab="combat"] #combat-panel { display: block !important; }
+      body[data-mobile-tab="combat"] #action-badge-panel { display: block !important; margin-bottom: 74px !important; }
+      body[data-mobile-tab="combat"] #anatomy-panel { display: none !important; }
+      body[data-mobile-tab="combat"] #progress-panel { display: none !important; }
+
+      body[data-mobile-tab="brain"] #canvas-container { z-index: 2 !important; pointer-events: auto !important; }
+      body[data-mobile-tab="brain"] #header-panel {
+        display: block !important;
+        position: fixed !important;
+        top: 10px !important;
+        left: 10px !important;
+        width: calc(100vw - 20px) !important;
+        z-index: 20 !important;
+        background: rgba(8, 14, 24, 0.78) !important;
+      }
+      body[data-mobile-tab="brain"] #header-panel .cam-controls { display: flex !important; }
+      body[data-mobile-tab="brain"] #action-badge-panel {
+        display: block !important;
+        position: fixed !important;
+        bottom: 72px !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        z-index: 20 !important;
+        background: rgba(8, 14, 24, 0.85) !important;
+      }
+      body[data-mobile-tab="brain"] #game-feed-panel { display: none !important; }
+      body[data-mobile-tab="brain"] #combat-panel { display: none !important; }
+      body[data-mobile-tab="brain"] #anatomy-panel { display: none !important; }
+      body[data-mobile-tab="brain"] #progress-panel { display: none !important; }
+
+      body[data-mobile-tab="curves"] #header-panel { display: none !important; }
+      body[data-mobile-tab="curves"] #game-feed-panel { display: none !important; }
+      body[data-mobile-tab="curves"] #combat-panel { display: none !important; }
+      body[data-mobile-tab="curves"] #action-badge-panel { display: none !important; }
+      body[data-mobile-tab="curves"] #anatomy-panel { display: none !important; }
+      body[data-mobile-tab="curves"] #progress-panel { display: block !important; }
+
+      body[data-mobile-tab="anatomy"] #header-panel { display: none !important; }
+      body[data-mobile-tab="anatomy"] #game-feed-panel { display: none !important; }
+      body[data-mobile-tab="anatomy"] #combat-panel { display: none !important; }
+      body[data-mobile-tab="anatomy"] #action-badge-panel { display: none !important; }
+      body[data-mobile-tab="anatomy"] #anatomy-panel { display: block !important; }
+      body[data-mobile-tab="anatomy"] #progress-panel { display: none !important; }
+    }
   </style>
 </head>
-<body>
+<body data-mobile-tab="combat">
   <div id="canvas-container"></div>
 
   <!-- Top Left: Title & 3D Camera Controls -->
@@ -317,7 +512,51 @@
     </div>
   </div>
 
+  <!-- Mobile Bottom Navigation Bar (Visible only on screens <= 860px) -->
+  <nav id="mobile-nav-bar">
+    <button class="mobile-tab-btn active" id="tab-btn-combat" onclick="switchTab('combat')">
+      <span class="tab-icon">🎮</span>
+      <span>Combat</span>
+    </button>
+    <button class="mobile-tab-btn" id="tab-btn-brain" onclick="switchTab('brain')">
+      <span class="tab-icon">🧠</span>
+      <span>Brain 3D</span>
+    </button>
+    <button class="mobile-tab-btn" id="tab-btn-curves" onclick="switchTab('curves')">
+      <span class="tab-icon">📊</span>
+      <span>Curves</span>
+    </button>
+    <button class="mobile-tab-btn" id="tab-btn-anatomy" onclick="switchTab('anatomy')">
+      <span class="tab-icon">🧬</span>
+      <span>Anatomy</span>
+    </button>
+  </nav>
+
   <script>
+    // -------------------------------------------------------------
+    // Mobile Tab Navigation Switcher
+    // -------------------------------------------------------------
+    let currentTab = 'combat';
+
+    function switchTab(tabName) {
+      currentTab = tabName;
+      document.body.setAttribute('data-mobile-tab', tabName);
+      document.querySelectorAll('.mobile-tab-btn').forEach(btn => btn.classList.remove('active'));
+      const activeBtn = document.getElementById('tab-btn-' + tabName);
+      if (activeBtn) activeBtn.classList.add('active');
+
+      // If switching to curves tab, redraw charts to guarantee accurate sizing
+      if (tabName === 'curves') {
+        setTimeout(() => {
+          if (survivalData.length > 0) {
+            drawSparkline('chart-survival', survivalData, '#00f0ff', 'rgba(0, 240, 255, 0.25)');
+            drawSparkline('chart-reward', rewardData, '#22c55e', 'rgba(34, 197, 94, 0.25)');
+            drawSparkline('chart-plasticity', plasticityData, '#f59e0b', 'rgba(245, 158, 11, 0.25)');
+          }
+        }, 80);
+      }
+    }
+
     // -------------------------------------------------------------
     // 1. Three.js Anatomical Fruit Fly Brain Scene Setup
     // -------------------------------------------------------------
@@ -329,7 +568,7 @@
     camera.position.set(0, 150, 480);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
 
@@ -338,6 +577,9 @@
     controls.dampingFactor = 0.05;
     controls.autoRotate = true;
     controls.autoRotateSpeed = 0.8;
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.enableRotate = true;
 
     // Ambient and point illumination
     const ambLight = new THREE.AmbientLight(0x0ea5e9, 0.45);
@@ -554,7 +796,7 @@
     }
 
     function handleStreamError(img) {
-      // Fallback: poll static frame every 150ms if MJPEG is interrupted
+      // Fallback: poll static frame every 200ms if MJPEG is interrupted
       setTimeout(() => {
         img.src = '/api/frame.jpg?t=' + Date.now();
       }, 200);
@@ -571,8 +813,8 @@
       const c = document.getElementById(canvasId);
       if (!c) return;
       const ctx = c.getContext('2d');
-      const w = c.clientWidth;
-      const h = c.clientHeight;
+      const w = c.clientWidth || 300;
+      const h = c.clientHeight || 75;
       c.width = w; c.height = h;
 
       ctx.clearRect(0, 0, w, h);
@@ -712,8 +954,9 @@
         if (actName.includes('ROLL')) actElem.style.color = '#00f0ff';
         else if (actName.includes('ATTACK')) actElem.style.color = '#f59e0b';
         else if (actName.includes('PARRY') || actName.includes('BLOCK')) actElem.style.color = '#d946ef';
+        else if (actName.includes('FORWARD') || actName.includes('ADVANCE')) actElem.style.color = '#22c55e';
         else if (actName.includes('STEP')) actElem.style.color = '#14b8a6';
-        else actElem.style.color = '#22c55e';
+        else actElem.style.color = '#94a3b8';
       }
 
       // Plasticity & Dopamine
@@ -796,6 +1039,11 @@
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      if (survivalData.length > 0) {
+        drawSparkline('chart-survival', survivalData, '#00f0ff', 'rgba(0, 240, 255, 0.25)');
+        drawSparkline('chart-reward', rewardData, '#22c55e', 'rgba(34, 197, 94, 0.25)');
+        drawSparkline('chart-plasticity', plasticityData, '#f59e0b', 'rgba(245, 158, 11, 0.25)');
+      }
     });
   </script>
 </body>
