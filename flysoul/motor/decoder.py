@@ -98,12 +98,16 @@ class MotorDecoder:
         return action_id, action_name, rates
 
     @staticmethod
-    def to_soulsgym_action(action_id: int) -> int:
+    def to_soulsgym_action(action_id: int, angle: float = 0.0) -> int:
         """Translate internal agent action ID to SoulsGym discrete action space.
 
         SoulsGym 1.2.0 discrete action IDs:
             0: forward
+            1: forward, right
+            2: right
             4: backward
+            6: left
+            7: left, forward
             8: forward roll
             12: backward roll
             16: light attack
@@ -111,6 +115,19 @@ class MotorDecoder:
             18: parry
             19: idle / do nothing
         """
+        if action_id == 6:
+            # Steer towards target orientation
+            if angle > 1.8:
+                return 6  # left
+            elif angle > 0.35:
+                return 7  # left, forward
+            elif angle < -1.8:
+                return 2  # right
+            elif angle < -0.35:
+                return 1  # forward, right
+            else:
+                return 0  # direct forward
+
         mapping = {
             0: 19,  # idle
             1: 12,  # dodge_roll (backward roll)
@@ -118,6 +135,5 @@ class MotorDecoder:
             3: 17,  # heavy attack
             4: 18,  # parry
             5: 4,   # step backward
-            6: 0,   # run forward
         }
         return mapping.get(action_id, 19)

@@ -267,8 +267,16 @@ def main():
                         spike_counts, explore=args.explore, distance=distance, boss_attacking=boss_attacking
                     )
 
-                    # 4. Step game environment (translate to SoulsGym discrete actions if live)
-                    step_action = decoder.to_soulsgym_action(action_id) if args.game else action_id
+                    # 4. Maintain lock-on to keep facing Gundyr
+                    if args.game and step % 15 == 0:
+                        try:
+                            if not env.unwrapped.game.lock_on:
+                                env.unwrapped.game._game_input.single_action("lock_on", 0.01)
+                        except Exception:
+                            pass
+
+                    # Step game environment (translate to SoulsGym discrete actions with angle steering)
+                    step_action = decoder.to_soulsgym_action(action_id, angle=encoder.last_angle) if args.game else action_id
                     obs, reward, terminated, truncated, info = env.step(step_action)
                     ep_reward += reward
 
@@ -345,8 +353,15 @@ def main():
                 action_id, action_name, motor_rates = decoder.decode(
                     spike_counts, explore=args.explore, distance=distance, boss_attacking=boss_attacking
                 )
-                global_action_counts[action_name] = global_action_counts.get(action_name, 0) + 1
-                step_action = decoder.to_soulsgym_action(action_id) if args.game else action_id
+                # Maintain lock-on to keep facing Gundyr
+                if args.game and step % 15 == 0:
+                    try:
+                        if not env.unwrapped.game.lock_on:
+                            env.unwrapped.game._game_input.single_action("lock_on", 0.01)
+                    except Exception:
+                        pass
+
+                step_action = decoder.to_soulsgym_action(action_id, angle=encoder.last_angle) if args.game else action_id
                 obs, reward, terminated, truncated, info = env.step(step_action)
                 ep_reward += reward
                 plasticity.update_traces(spike_counts)

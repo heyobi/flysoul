@@ -16,10 +16,14 @@ class SensoryEncoder:
         self.num_neurons = topology.num_neurons
         self.prev_player_hp = 1.0
         self.prev_distance = 10.0
+        self.last_angle = 0.0
+        self.last_distance = 8.0
 
     def reset(self, initial_player_hp: float = 1.0, initial_distance: float = 8.0):
         self.prev_player_hp = initial_player_hp
         self.prev_distance = initial_distance
+        self.last_angle = 0.0
+        self.last_distance = initial_distance
 
     def encode(self, obs: dict | np.ndarray) -> np.ndarray:
         """Translate combat state into bio-electric drive current.
@@ -126,5 +130,7 @@ class SensoryEncoder:
         # Update historical state
         self.prev_player_hp = player_hp
         self.prev_distance = distance
+        self.last_distance = distance
+        self.last_angle = angle
 
         return drive
