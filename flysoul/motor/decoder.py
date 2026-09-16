@@ -33,12 +33,20 @@ class MotorDecoder:
         self.temperature = temperature
         self.motor_indices = topology.motor_indices
 
-    def decode(self, spike_counts: np.ndarray, explore: bool = False) -> Tuple[int, str, Dict[str, float]]:
+    def decode(
+        self,
+        spike_counts: np.ndarray,
+        explore: bool = False,
+        distance: float = 10.0,
+        boss_attacking: bool = False,
+    ) -> Tuple[int, str, Dict[str, float]]:
         """Determine game action from descending neuron spike counts.
 
         Args:
             spike_counts: Array of spike counts per neuron over the simulation step.
             explore: If True, uses softmax temperature sampling instead of argmax.
+            distance: Distance to enemy in meters.
+            boss_attacking: Whether enemy is currently executing an attack.
 
         Returns:
             action_id: Integer action for SoulsGym.
@@ -53,22 +61,19 @@ class MotorDecoder:
             else:
                 rates[pool_name] = 0.0
 
-        # Score the discrete actions
-        # Action 0: idle
-        # Action 1: dodge_roll
-        # Action 2: attack_light
-        # Action 3: attack_heavy
-        # Action 4: block_parry
-        # Action 5: step_back
-        # Action 6: run_forward (synthesized if approaching or attacking)
+        # Melee strike opportunity: if in striking range and not dodging an attack
+        melee_window = (distance <= 3.0) and (not boss_attacking)
+        if melee_window and (np.random.random() < 0.28):
+            rates["attack_light"] = max(rates.get("attack_light", 0.0), 1.8)
 
+        # Score the discrete actions
         action_scores = np.array([
             0.5,                                       # 0: Idle baseline
-            rates.get("dodge_roll", 0.0) * 1.4,        # 1: Escape / dodge roll (high priority reflex)
-            rates.get("attack_light", 0.0) * 1.1,      # 2: Light attack
-            rates.get("attack_heavy", 0.0) * 1.0,      # 3: Heavy attack
-            rates.get("block_parry", 0.0) * 1.2,       # 4: Block / parry
-            rates.get("step_back", 0.0) * 1.1,         # 5: Step back
+            rates.get("dodge_roll", 0.0) * (1.6 if boss_attacking else 1.1),  # 1: Escape / dodge roll
+            rates.get("attack_light", 0.0) * (1.5 if melee_window else 0.9),  # 2: Light attack
+            rates.get("attack_heavy", 0.0) * (1.2 if melee_window else 0.8),  # 3: Heavy attack
+            rates.get("block_parry", 0.0) * (1.3 if boss_attacking else 0.8),  # 4: Block / parry
+            rates.get("step_back", 0.0) * (1.2 if boss_attacking else 0.8),    # 5: Step back
             (rates.get("turn_left", 0.0) + rates.get("turn_right", 0.0)) * 0.8,  # 6: Forward advance
         ], dtype=np.float32)
 

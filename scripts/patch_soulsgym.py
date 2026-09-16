@@ -50,5 +50,19 @@ if old_fog_gate in text:
 else:
     print("[!] _enter_fog_gate pattern not found or already patched.")
 
+# 3. Allow player animation to be Idle or Move during entity reset check
+old_check = 'if self.game.player_animation != "Idle":'
+new_check = 'if self.game.player_animation not in ("Idle", "Move"):'
+if old_check in text:
+    text = text.replace(old_check, new_check, 1)
+    print("[+] Patched _entity_reset_check successfully.")
+
+# 4. Ensure keys are released at the start of _entity_reset
+old_ent_reset = '    def _entity_reset(self):\n        """Reset the player and boss HP and reset their poses."""'
+new_ent_reset = '    def _entity_reset(self):\n        """Reset the player and boss HP and reset their poses."""\n        self._game_input.reset()'
+if old_ent_reset in text:
+    text = text.replace(old_ent_reset, new_ent_reset, 1)
+    print("[+] Patched _entity_reset key release successfully.")
+
 iudex_file.write_text(text, encoding="utf-8")
 print("[+] Patching complete.")

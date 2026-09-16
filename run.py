@@ -21,6 +21,8 @@ if hasattr(sys.stdout, "reconfigure"):
 from rich.console import Console
 from rich.live import Live
 
+import cv2
+
 from flysoul.config import BioPhysicsConfig, CircuitConfig
 from flysoul.connectome.engine import ConnectomeEngine
 from flysoul.connectome.graph import build_fly_circuit
@@ -29,7 +31,12 @@ from flysoul.env.souls_wrapper import make_souls_env
 from flysoul.motor.decoder import MotorDecoder
 from flysoul.sensory.encoder import SensoryEncoder
 from flysoul.telemetry.dashboard import FlySoulDashboard
-from flysoul.visualizer import start_visualizer, set_topology, broadcast_event
+from flysoul.visualizer import (
+    start_visualizer,
+    set_topology,
+    broadcast_event,
+    set_latest_frame,
+)
 
 
 def parse_args():
@@ -196,9 +203,12 @@ def main():
                     # 2. Advance connectome dynamics (1 frame = 16.67 ms)
                     spike_counts = engine.step(drive, duration_ms=16.67)
 
+                    # Extract pre-step combat state for context-aware motor decoding
+                    player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking, boss_state = extract_combat_metrics(obs, info if 'info' in locals() else {})
+
                     # 3. Decode descending motor spikes into game action
                     action_id, action_name, motor_rates = decoder.decode(
-                        spike_counts, explore=args.explore
+                        spike_counts, explore=args.explore, distance=distance, boss_attacking=boss_attacking
                     )
 
                     # 4. Step game environment (translate to SoulsGym discrete actions if live)
@@ -216,6 +226,19 @@ def main():
                     global_action_counts[action_name] = global_action_counts.get(action_name, 0) + 1
 
                     if enable_web:
+                        # Grab and stream video frame from SoulsGym
+                        if step % 3 == 0:
+                            try:
+                                raw = env.unwrapped.game._game_window.raw_img
+                                if raw is not None and raw.size > 0:
+                                    bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+                                    resized = cv2.resize(bgr, (360, 202), interpolation=cv2.INTER_LINEAR)
+                                    ret, encoded = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 72])
+                                    if ret:
+                                        set_latest_frame(encoded.tobytes())
+                            except Exception:
+                                pass
+
                         spikes = np.where(spike_counts > 0)[0].tolist()
                         broadcast_event({
                             "episode": ep,
@@ -261,8 +284,10 @@ def main():
                 step += 1
                 drive = encoder.encode(obs)
                 spike_counts = engine.step(drive, duration_ms=16.67)
+
+                pre_hp_pct, pre_sp_pct, pre_boss_hp_pct, distance, boss_attacking, boss_state = extract_combat_metrics(obs, info if 'info' in locals() else {})
                 action_id, action_name, motor_rates = decoder.decode(
-                    spike_counts, explore=args.explore
+                    spike_counts, explore=args.explore, distance=distance, boss_attacking=boss_attacking
                 )
                 global_action_counts[action_name] = global_action_counts.get(action_name, 0) + 1
                 step_action = decoder.to_soulsgym_action(action_id) if args.game else action_id
@@ -275,6 +300,19 @@ def main():
                 player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking, boss_state = extract_combat_metrics(obs, info)
 
                 if enable_web:
+                    # Stream video frame from SoulsGym
+                    if step % 3 == 0:
+                        try:
+                            raw = env.unwrapped.game._game_window.raw_img
+                            if raw is not None and raw.size > 0:
+                                bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+                                resized = cv2.resize(bgr, (360, 202), interpolation=cv2.INTER_LINEAR)
+                                ret, encoded = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 72])
+                                if ret:
+                                    set_latest_frame(encoded.tobytes())
+                        except Exception:
+                            pass
+
                     spikes = np.where(spike_counts > 0)[0].tolist()
                     broadcast_event({
                         "episode": ep,

@@ -24,6 +24,23 @@ _subscriber_queues: List[queue.Queue] = []
 _subscriber_lock = threading.Lock()
 _topology_data: Optional[Dict[str, Any]] = None
 
+# Video feed JPEG frame buffer
+_latest_frame_jpeg: Optional[bytes] = None
+_frame_lock = threading.Lock()
+
+
+def set_latest_frame(jpeg_bytes: bytes):
+    """Cache the latest JPEG frame from Dark Souls III for the web stream."""
+    global _latest_frame_jpeg
+    with _frame_lock:
+        _latest_frame_jpeg = jpeg_bytes
+
+
+def get_latest_frame() -> Optional[bytes]:
+    """Retrieve the latest JPEG frame."""
+    with _frame_lock:
+        return _latest_frame_jpeg
+
 
 def set_topology(topology: CircuitTopology):
     """Cache the circuit topology for the 3D client."""
@@ -472,6 +489,40 @@ class VisualizerHandler(BaseHTTPRequestHandler):
                 with _subscriber_lock:
                     if q in _subscriber_queues:
                         _subscriber_queues.remove(q)
+
+        elif self.path == "/api/frame.jpg":
+            frame = get_latest_frame()
+            if frame:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(frame)))
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(frame)
+            else:
+                self.send_response(204)
+                self.end_headers()
+
+        elif self.path == "/api/video_feed":
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+            try:
+                while True:
+                    frame = get_latest_frame()
+                    if frame:
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                    time.sleep(0.066)  # ~15 FPS
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         else:
             self.send_response(404)
