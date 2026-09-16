@@ -54,6 +54,11 @@ def parse_args():
         help="Number of combat episodes to run.",
     )
     parser.add_argument(
+        "--continuous",
+        action="store_true",
+        help="Run combat indefinitely in a continuous loop until stopped.",
+    )
+    parser.add_argument(
         "--no-dashboard",
         action="store_true",
         help="Disable interactive terminal dashboard and use standard console output.",
@@ -161,9 +166,13 @@ def main():
     dashboard = FlySoulDashboard(console)
 
     victories = 0
-    total_episodes = args.episodes
+    total_episodes = 999999 if args.continuous else args.episodes
+    if args.continuous:
+        console.print("[bold cyan]🔄 Running in continuous combat loop. Press Ctrl+C to stop.[/bold cyan]")
 
-    for ep in range(1, total_episodes + 1):
+    ep = 0
+    while ep < total_episodes:
+        ep += 1
         obs, _ = env.reset()
         engine.reset_state()
         encoder.reset()
