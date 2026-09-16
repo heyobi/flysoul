@@ -8,6 +8,7 @@ with realistic small-world, modular connectivity.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
@@ -41,6 +42,12 @@ class CircuitTopology:
 
     # Plastic synapse mask for KC -> MBON connections
     plastic_synapse_mask: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))
+
+    # 3D stereotaxic coordinates [N, 3] in microns (MaleCNS space)
+    coords: np.ndarray = field(default_factory=lambda: np.zeros((0, 3), dtype=np.float32))
+
+    # Anatomical region labels per neuron
+    labels: List[str] = field(default_factory=list)
 
 
 def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> CircuitTopology:
@@ -158,6 +165,107 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
         flat_plastic.extend(is_plastic[i])
     ptr[num_total] = len(flat_post)
 
+    # 3. Generate 3D stereotaxic coordinates and anatomical region labels
+    coords = np.zeros((num_total, 3), dtype=np.float32)
+    labels = [""] * num_total
+
+    # Retina / Compound Eye (Left and Right hemifields)
+    half_r = len(retina_idx) // 2
+    for i, idx_n in enumerate(retina_idx):
+        labels[idx_n] = "Retina"
+        side = -1.0 if i < half_r else 1.0
+        angle = (i % half_r) / max(1, half_r - 1) * math.pi - math.pi / 2.0
+        coords[idx_n] = [
+            side * (180.0 + 35.0 * math.cos(angle) + float(rng.normal(0, 4))),
+            50.0 * math.sin(angle) + float(rng.normal(0, 4)),
+            float(rng.normal(0, 15)),
+        ]
+
+    # Motion Detectors (Lobula Plate / LPTC)
+    for idx_n in motion_idx:
+        labels[idx_n] = "Lobula_Motion"
+        side = -1.0 if rng.random() < 0.5 else 1.0
+        coords[idx_n] = [
+            side * (135.0 + float(rng.normal(0, 8))),
+            float(rng.normal(-15, 12)),
+            float(rng.normal(15, 12)),
+        ]
+
+    # Compass / Ellipsoid Body (Central Complex ring attractor)
+    for i, idx_n in enumerate(compass_idx):
+        labels[idx_n] = "Compass_EPG"
+        theta = i / len(compass_idx) * 2.0 * math.pi
+        r = 35.0 + float(rng.normal(0, 2))
+        coords[idx_n] = [
+            r * math.cos(theta),
+            r * math.sin(theta) + 10.0,
+            float(rng.normal(0, 4)),
+        ]
+
+    # Central Complex / Protocerebral Bridge
+    for idx_n in cx_idx:
+        labels[idx_n] = "Central_Complex"
+        coords[idx_n] = [
+            float(rng.normal(0, 40)),
+            float(rng.normal(-10, 18)),
+            float(rng.normal(15, 10)),
+        ]
+
+    # Kenyon Cells (Mushroom Body Calyx)
+    for idx_n in kenyon_idx:
+        labels[idx_n] = "Kenyon_Cell"
+        side = -1.0 if rng.random() < 0.5 else 1.0
+        coords[idx_n] = [
+            side * (65.0 + float(rng.normal(0, 15))),
+            float(rng.normal(55, 18)),
+            float(rng.normal(35, 12)),
+        ]
+
+    # MBONs (Mushroom Body Output Neurons)
+    for idx_n in mbon_idx:
+        labels[idx_n] = "MBON"
+        side = -1.0 if rng.random() < 0.5 else 1.0
+        coords[idx_n] = [
+            side * (45.0 + float(rng.normal(0, 10))),
+            float(rng.normal(35, 12)),
+            float(rng.normal(10, 8)),
+        ]
+
+    # Dopaminergic Neurons (PPL1 - Aversive, PAM - Reward)
+    for idx_n in ppl1_idx:
+        labels[idx_n] = "Dopamine_PPL1"
+        coords[idx_n] = [
+            float(rng.normal(0, 20)),
+            float(rng.normal(-35, 10)),
+            float(rng.normal(25, 8)),
+        ]
+    for idx_n in pam_idx:
+        labels[idx_n] = "Dopamine_PAM"
+        coords[idx_n] = [
+            float(rng.normal(0, 18)),
+            float(rng.normal(20, 8)),
+            float(rng.normal(-18, 8)),
+        ]
+
+    # Nociceptors (Sensory pain reflex)
+    for idx_n in nociceptor_idx:
+        labels[idx_n] = "Nociceptor"
+        coords[idx_n] = [
+            float(rng.normal(0, 50)),
+            float(rng.normal(-60, 12)),
+            float(rng.normal(45, 12)),
+        ]
+
+    # Descending Motor Neurons (Ventral Nerve Cord tract traveling downwards)
+    for act_name, pool in motor_indices.items():
+        for idx_n in pool:
+            labels[idx_n] = f"Motor_{act_name}"
+            coords[idx_n] = [
+                float(rng.normal(0, 20)),
+                float(rng.normal(-50, 15)),
+                -50.0 - float(rng.uniform(0, 90)),
+            ]
+
     return CircuitTopology(
         num_neurons=num_total,
         ptr=ptr,
@@ -174,4 +282,7 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
         pam_indices=pam_idx,
         motor_indices=motor_indices,
         plastic_synapse_mask=np.asarray(flat_plastic, dtype=bool),
+        coords=coords,
+        labels=labels,
     )
+

@@ -29,6 +29,7 @@ from flysoul.env.souls_wrapper import make_souls_env
 from flysoul.motor.decoder import MotorDecoder
 from flysoul.sensory.encoder import SensoryEncoder
 from flysoul.telemetry.dashboard import FlySoulDashboard
+from flysoul.visualizer import start_visualizer, set_topology, broadcast_event
 
 
 def parse_args():
@@ -63,12 +64,55 @@ def parse_args():
         help="Enable Boltzmann exploratory sampling for action selection.",
     )
     parser.add_argument(
+        "--no-web",
+        action="store_true",
+        help="Disable the real-time 3D WebGL fruit fly brain visualizer.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="HTTP port for the 3D connectome visualizer (default: 8080).",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
         help="Random seed for circuit construction.",
     )
     return parser.parse_args()
+
+
+def extract_combat_metrics(obs, info):
+    """Extract normalized telemetry values from SoulsGym or Mock environment observations."""
+    def _safe_float(v, default=0.0) -> float:
+        if v is None:
+            return default
+        if isinstance(v, (np.ndarray, list)):
+            return float(v[0]) if len(v) > 0 else default
+        return float(v)
+
+    if isinstance(obs, dict) and "player_pose" in obs and "boss_pose" in obs:
+        p_pose = np.asarray(obs["player_pose"])
+        b_pose = np.asarray(obs["boss_pose"])
+        distance = float(np.hypot(b_pose[0] - p_pose[0], b_pose[1] - p_pose[1]))
+        p_max = max(1.0, _safe_float(obs.get("player_max_hp"), 1000.0))
+        b_max = max(1.0, _safe_float(obs.get("boss_max_hp"), 1037.0))
+        player_hp_pct = float(np.clip(_safe_float(obs.get("player_hp")) / p_max, 0.0, 1.0))
+        player_sp_pct = float(np.clip(_safe_float(obs.get("player_sp"), 100.0) / 100.0, 0.0, 1.0))
+        boss_hp_pct = float(np.clip(_safe_float(obs.get("boss_hp")) / b_max, 0.0, 1.0))
+        boss_attacking = bool(obs.get("boss_animation", -1) > 0 or obs.get("boss_attacking", False))
+    elif isinstance(obs, dict):
+        player_hp_pct = float(np.clip(_safe_float(obs.get("player_hp"), 1.0), 0.0, 1.0))
+        player_sp_pct = float(np.clip(_safe_float(obs.get("player_sp"), 1.0), 0.0, 1.0))
+        boss_hp_pct = float(np.clip(_safe_float(obs.get("boss_hp"), 1.0), 0.0, 1.0))
+        distance = _safe_float(obs.get("boss_distance"), 5.0)
+        boss_attacking = bool(obs.get("boss_attacking", False))
+    else:
+        player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking = 1.0, 1.0, 1.0, 5.0, False
+
+    boss_state = info.get("boss_state", "attacking" if boss_attacking else "active")
+    return player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking, boss_state
 
 
 def main():
@@ -98,7 +142,20 @@ def main():
         f"[bold]{int(np.sum(topology.plastic_synapse_mask)):,}[/bold] plastic KC->MBON connections."
     )
 
-    # 2. Initialize environment
+    # 2. Start Live 3D Fruit Fly Brain Visualizer
+    enable_web = not args.no_web
+    if enable_web:
+        set_topology(topology)
+        try:
+            start_visualizer(host="0.0.0.0", port=args.port)
+            console.print(
+                f"[bold green]🌐 Live 3D Fruit Fly Brain Visualizer active at: [/bold green]"
+                f"[bold yellow underline]http://localhost:{args.port}[/bold yellow underline]"
+            )
+        except Exception as e:
+            console.print(f"[yellow]Could not bind web visualizer port {args.port}: {e}[/yellow]")
+
+    # 3. Initialize environment
     use_mock = not args.game
     env = make_souls_env(use_mock=use_mock)
     dashboard = FlySoulDashboard(console)
@@ -142,34 +199,26 @@ def main():
                     plasticity.update_traces(spike_counts)
                     plasticity.apply_reinforcement(reward)
 
-                    # 6. Update visual telemetry
+                    # 6. Extract telemetry & broadcast to 3D Web Visualizer
                     active_count = int(np.count_nonzero(spike_counts))
+                    player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking, boss_state = extract_combat_metrics(obs, info)
 
-                    def _safe_float(v, default=0.0) -> float:
-                        if v is None:
-                            return default
-                        if isinstance(v, (np.ndarray, list)):
-                            return float(v[0]) if len(v) > 0 else default
-                        return float(v)
-
-                    if isinstance(obs, dict) and "player_pose" in obs and "boss_pose" in obs:
-                        p_pose = np.asarray(obs["player_pose"])
-                        b_pose = np.asarray(obs["boss_pose"])
-                        distance = float(np.hypot(b_pose[0] - p_pose[0], b_pose[1] - p_pose[1]))
-                        p_max = max(1.0, _safe_float(obs.get("player_max_hp"), 1000.0))
-                        b_max = max(1.0, _safe_float(obs.get("boss_max_hp"), 1037.0))
-                        player_hp_pct = _safe_float(obs.get("player_hp")) / p_max
-                        player_sp_pct = _safe_float(obs.get("player_sp"), 100.0) / 100.0
-                        boss_hp_pct = _safe_float(obs.get("boss_hp")) / b_max
-                    elif isinstance(obs, dict):
-                        player_hp_pct = _safe_float(obs.get("player_hp"), 1.0)
-                        player_sp_pct = _safe_float(obs.get("player_sp"), 1.0)
-                        boss_hp_pct = _safe_float(obs.get("boss_hp"), 1.0)
-                        distance = _safe_float(obs.get("boss_distance"), 5.0)
-                    else:
-                        player_hp_pct, player_sp_pct, boss_hp_pct, distance = 1.0, 1.0, 1.0, 5.0
-
-                    boss_state = info.get("boss_state", "active")
+                    if enable_web:
+                        spikes = np.where(spike_counts > 0)[0].tolist()
+                        broadcast_event({
+                            "episode": ep,
+                            "step": step,
+                            "player_hp": player_hp_pct,
+                            "player_sp": player_sp_pct,
+                            "boss_hp": boss_hp_pct,
+                            "boss_distance": distance,
+                            "boss_attacking": boss_attacking,
+                            "action_name": action_name,
+                            "dopamine": float(plasticity.dopamine_level),
+                            "active_neurons": active_count,
+                            "cumulative_reward": ep_reward,
+                            "spikes": spikes,
+                        })
 
                     layout = dashboard.create_layout(
                         episode=ep,
@@ -203,6 +252,26 @@ def main():
                 ep_reward += reward
                 plasticity.update_traces(spike_counts)
                 plasticity.apply_reinforcement(reward)
+
+                active_count = int(np.count_nonzero(spike_counts))
+                player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking, boss_state = extract_combat_metrics(obs, info)
+
+                if enable_web:
+                    spikes = np.where(spike_counts > 0)[0].tolist()
+                    broadcast_event({
+                        "episode": ep,
+                        "step": step,
+                        "player_hp": player_hp_pct,
+                        "player_sp": player_sp_pct,
+                        "boss_hp": boss_hp_pct,
+                        "boss_distance": distance,
+                        "boss_attacking": boss_attacking,
+                        "action_name": action_name,
+                        "dopamine": float(plasticity.dopamine_level),
+                        "active_neurons": active_count,
+                        "cumulative_reward": ep_reward,
+                        "spikes": spikes,
+                    })
 
         # Episode summary
         boss_hp_raw = info.get("boss_hp_raw", int(boss_hp_pct * 1037) if 'boss_hp_pct' in locals() else 0)
