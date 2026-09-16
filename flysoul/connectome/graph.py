@@ -165,105 +165,148 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
         flat_plastic.extend(is_plastic[i])
     ptr[num_total] = len(flat_post)
 
-    # 3. Generate 3D stereotaxic coordinates and anatomical region labels
+    # 3. Generate 3D stereotaxic coordinates and anatomical region labels (MaleCNS v1.0 standard space)
     coords = np.zeros((num_total, 3), dtype=np.float32)
     labels = [""] * num_total
 
-    # Retina / Compound Eye (Left and Right hemifields)
+    # Optic Lobes - Outer Retina / Lamina & Medulla (Left & Right Lateral Crescents)
     half_r = len(retina_idx) // 2
     for i, idx_n in enumerate(retina_idx):
-        labels[idx_n] = "Retina"
+        labels[idx_n] = "Retina_OpticLobe"
         side = -1.0 if i < half_r else 1.0
-        angle = (i % half_r) / max(1, half_r - 1) * math.pi - math.pi / 2.0
+        # Shell surface coordinates: azimuth and elevation angles
+        u = ((i % half_r) / max(1, half_r - 1)) * math.pi - math.pi / 2.0
+        v = (i % 7) / 7.0 * math.pi - math.pi / 2.0
+        # Curved outward kidney/crescent shape matching Drosophila optic lobe
+        r_x = 65.0 + float(rng.normal(0, 3.0))
+        r_y = 80.0 + float(rng.normal(0, 3.5))
+        r_z = 55.0 + float(rng.normal(0, 3.0))
         coords[idx_n] = [
-            side * (180.0 + 35.0 * math.cos(angle) + float(rng.normal(0, 4))),
-            50.0 * math.sin(angle) + float(rng.normal(0, 4)),
-            float(rng.normal(0, 15)),
+            side * (135.0 + r_x * math.cos(u) * math.cos(v)),
+            r_y * math.sin(u) * 0.85 + float(rng.normal(0, 3.0)),
+            r_z * math.sin(v) + float(rng.normal(0, 3.0)),
         ]
 
-    # Motion Detectors (Lobula Plate / LPTC)
-    for idx_n in motion_idx:
+    # Motion Detectors (Lobula & Lobula Plate LPTC - Posterior Inner Optic Lobe)
+    half_m = len(motion_idx) // 2
+    for i, idx_n in enumerate(motion_idx):
         labels[idx_n] = "Lobula_Motion"
-        side = -1.0 if rng.random() < 0.5 else 1.0
+        side = -1.0 if i < half_m else 1.0
+        u = ((i % half_m) / max(1, half_m - 1)) * math.pi - math.pi / 2.0
         coords[idx_n] = [
-            side * (135.0 + float(rng.normal(0, 8))),
-            float(rng.normal(-15, 12)),
-            float(rng.normal(15, 12)),
+            side * (105.0 + 35.0 * math.cos(u) + float(rng.normal(0, 4.0))),
+            60.0 * math.sin(u) + float(rng.normal(-10, 4.0)),
+            float(rng.normal(15, 8.0)),
         ]
 
-    # Compass / Ellipsoid Body (Central Complex ring attractor)
+    # Central Complex - Ellipsoid Body (EB) Ring Attractor (Midline Torus)
     for i, idx_n in enumerate(compass_idx):
-        labels[idx_n] = "Compass_EPG"
+        labels[idx_n] = "Compass_EB"
         theta = i / len(compass_idx) * 2.0 * math.pi
-        r = 35.0 + float(rng.normal(0, 2))
+        r_ring = 28.0 + float(rng.normal(0, 1.5))
         coords[idx_n] = [
-            r * math.cos(theta),
-            r * math.sin(theta) + 10.0,
-            float(rng.normal(0, 4)),
+            r_ring * math.cos(theta),
+            r_ring * math.sin(theta) + 5.0,
+            float(rng.normal(8.0, 2.5)),
         ]
 
-    # Central Complex / Protocerebral Bridge
-    for idx_n in cx_idx:
+    # Central Complex - Fan-shaped Body (FB) and Protocerebral Bridge (PB)
+    half_cx = len(cx_idx) // 2
+    for i, idx_n in enumerate(cx_idx):
         labels[idx_n] = "Central_Complex"
-        coords[idx_n] = [
-            float(rng.normal(0, 40)),
-            float(rng.normal(-10, 18)),
-            float(rng.normal(15, 10)),
-        ]
+        if i < half_cx:
+            # Fan-shaped body: layered fan arching dorsal to EB
+            t = (i / max(1, half_cx - 1)) * 2.0 - 1.0  # [-1, 1]
+            coords[idx_n] = [
+                t * 38.0 + float(rng.normal(0, 2.0)),
+                24.0 - 10.0 * (t ** 2) + float(rng.normal(0, 3.0)),
+                22.0 + float(rng.normal(0, 3.0)),
+            ]
+        else:
+            # Protocerebral bridge: horizontal mustache arching across top posterior
+            t = ((i - half_cx) / max(1, half_cx - 1)) * 2.0 - 1.0
+            coords[idx_n] = [
+                t * 52.0 + float(rng.normal(0, 2.0)),
+                40.0 - 8.0 * (t ** 2) + float(rng.normal(0, 2.5)),
+                36.0 + float(rng.normal(0, 2.5)),
+            ]
 
-    # Kenyon Cells (Mushroom Body Calyx)
-    for idx_n in kenyon_idx:
+    # Kenyon Cells - Mushroom Body (Calyx and Bifurcating Lobes)
+    half_k = len(kenyon_idx) // 2
+    for i, idx_n in enumerate(kenyon_idx):
         labels[idx_n] = "Kenyon_Cell"
-        side = -1.0 if rng.random() < 0.5 else 1.0
-        coords[idx_n] = [
-            side * (65.0 + float(rng.normal(0, 15))),
-            float(rng.normal(55, 18)),
-            float(rng.normal(35, 12)),
-        ]
+        side = -1.0 if i < half_k else 1.0
+        sub_i = i % half_k
+        if sub_i < half_k * 0.4:
+            # Calyx: posterior globular cup
+            coords[idx_n] = [
+                side * (62.0 + float(rng.normal(0, 10.0))),
+                float(rng.normal(52.0, 10.0)),
+                float(rng.normal(38.0, 8.0)),
+            ]
+        elif sub_i < half_k * 0.7:
+            # Vertical alpha/alpha' lobe projecting dorsally
+            t = (sub_i - half_k * 0.4) / (half_k * 0.3)
+            coords[idx_n] = [
+                side * (48.0 - t * 15.0 + float(rng.normal(0, 3.0))),
+                20.0 + t * 25.0 + float(rng.normal(0, 4.0)),
+                25.0 + t * 30.0 + float(rng.normal(0, 3.5)),
+            ]
+        else:
+            # Medial beta/gamma lobe projecting towards midline
+            t = (sub_i - half_k * 0.7) / (half_k * 0.3)
+            coords[idx_n] = [
+                side * (48.0 - t * 35.0 + float(rng.normal(0, 3.0))),
+                15.0 - t * 10.0 + float(rng.normal(0, 3.5)),
+                12.0 - t * 8.0 + float(rng.normal(0, 3.0)),
+            ]
 
-    # MBONs (Mushroom Body Output Neurons)
-    for idx_n in mbon_idx:
+    # MBONs (Mushroom Body Output Neurons - Reading out from lobes)
+    for i, idx_n in enumerate(mbon_idx):
         labels[idx_n] = "MBON"
         side = -1.0 if rng.random() < 0.5 else 1.0
         coords[idx_n] = [
-            side * (45.0 + float(rng.normal(0, 10))),
-            float(rng.normal(35, 12)),
-            float(rng.normal(10, 8)),
+            side * (25.0 + float(rng.normal(0, 6.0))),
+            float(rng.normal(12.0, 6.0)),
+            float(rng.normal(10.0, 5.0)),
         ]
 
-    # Dopaminergic Neurons (PPL1 - Aversive, PAM - Reward)
+    # Dopaminergic Neurons - PPL1 (Aversive / Punishment) & PAM (Reward)
     for idx_n in ppl1_idx:
         labels[idx_n] = "Dopamine_PPL1"
+        side = -1.0 if rng.random() < 0.5 else 1.0
         coords[idx_n] = [
-            float(rng.normal(0, 20)),
-            float(rng.normal(-35, 10)),
-            float(rng.normal(25, 8)),
+            side * (42.0 + float(rng.normal(0, 6.0))),
+            float(rng.normal(-18.0, 6.0)),
+            float(rng.normal(45.0, 5.0)),
         ]
     for idx_n in pam_idx:
         labels[idx_n] = "Dopamine_PAM"
         coords[idx_n] = [
-            float(rng.normal(0, 18)),
-            float(rng.normal(20, 8)),
-            float(rng.normal(-18, 8)),
+            float(rng.normal(0, 14.0)),
+            float(rng.normal(16.0, 5.0)),
+            float(rng.normal(-8.0, 5.0)),
         ]
 
-    # Nociceptors (Sensory pain reflex)
+    # Nociceptors (Sensory Pain Reflex)
     for idx_n in nociceptor_idx:
         labels[idx_n] = "Nociceptor"
         coords[idx_n] = [
-            float(rng.normal(0, 50)),
-            float(rng.normal(-60, 12)),
-            float(rng.normal(45, 12)),
+            float(rng.normal(0, 35.0)),
+            float(rng.normal(-45.0, 8.0)),
+            float(rng.normal(32.0, 8.0)),
         ]
 
-    # Descending Motor Neurons (Ventral Nerve Cord tract traveling downwards)
+    # Descending Motor Neurons (Ventral Nerve Cord - Spinal tract to T1-T3 leg neuropils)
     for act_name, pool in motor_indices.items():
-        for idx_n in pool:
+        for i, idx_n in enumerate(pool):
             labels[idx_n] = f"Motor_{act_name}"
+            # Segment along the descending VNC column (Z from -30 to -140)
+            z_pos = -30.0 - float(rng.uniform(0, 110.0))
             coords[idx_n] = [
-                float(rng.normal(0, 20)),
-                float(rng.normal(-50, 15)),
-                -50.0 - float(rng.uniform(0, 90)),
+                float(rng.normal(0, 16.0)),
+                float(rng.normal(-25.0, 10.0)),
+                z_pos,
             ]
 
     return CircuitTopology(

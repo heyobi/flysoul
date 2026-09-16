@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FlySoul: MaleCNS v1.0 Fruit Fly Connectome vs Dark Souls III</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    :root {
+      --bg-dark: #04070c;
+      --panel-bg: rgba(8, 14, 24, 0.85);
+      --panel-border: rgba(56, 189, 248, 0.22);
+      --cyan: #00f0ff;
+      --teal: #14b8a6;
+      --violet: #d946ef;
+      --gold: #f59e0b;
+      --crimson: #f43f5e;
+      --lime: #22c55e;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; }
+    body { background: var(--bg-dark); color: var(--text-main); overflow: hidden; width: 100vw; height: 100vh; }
+    #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
+
+    /* Glassmorphic Panels */
+    .hud-panel {
+      position: absolute;
+      z-index: 10;
+      background: var(--panel-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 14px 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      pointer-events: auto;
+    }
+
+    /* Top Left: Header & Camera Controls */
+    #header-panel {
+      top: 14px; left: 14px; max-width: 440px;
+    }
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    h1 { font-size: 16px; font-weight: 700; color: #fff; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; padding: 3px 8px; border-radius: 9999px;
+      background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); color: var(--lime);
+    }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 8px var(--lime); animation: pulse 1.8s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
+
+    .subtitle { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+    
+    .cam-controls { display: flex; gap: 6px; margin-top: 10px; }
+    .cam-btn {
+      background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3);
+      color: var(--cyan); border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .cam-btn:hover { background: rgba(56, 189, 248, 0.25); border-color: var(--cyan); }
+    .cam-btn.active { background: var(--cyan); color: #000; }
+
+    /* Top Right: Dark Souls III Combat HUD */
+    #combat-panel {
+      top: 14px; right: 14px; width: 380px;
+    }
+    .panel-header { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .boss-name { font-size: 16px; font-weight: 800; color: #ef4444; letter-spacing: 1px; display: flex; align-items: center; justify-content: space-between; }
+    .boss-status-badge { font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: 700; }
+    .boss-status-idle { background: rgba(34, 197, 94, 0.2); color: var(--lime); border: 1px solid var(--lime); }
+    .boss-status-attack { background: rgba(239, 68, 68, 0.25); color: #f87171; border: 1px solid #ef4444; animation: pulse 1s infinite; }
+
+    .bar-group { margin-top: 10px; }
+    .bar-label { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; margin-bottom: 3px; }
+    .bar-track { width: 100%; height: 10px; background: rgba(255, 255, 255, 0.07); border-radius: 5px; overflow: hidden; position: relative; }
+    .bar-fill { height: 100%; border-radius: 5px; transition: width 0.15s ease-out; }
+    .bar-boss-hp { background: linear-gradient(90deg, #dc2626, #f87171); width: 100%; box-shadow: 0 0 10px rgba(220, 38, 38, 0.6); }
+    .bar-player-hp { background: linear-gradient(90deg, #b91c1c, #ef4444); width: 100%; }
+    .bar-player-sp { background: linear-gradient(90deg, #059669, #34d399); width: 100%; }
+
+    .combat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; font-size: 11px; }
+    .combat-stat { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); padding: 6px 10px; border-radius: 6px; }
+    .stat-val { font-size: 14px; font-weight: 700; color: #fff; margin-top: 2px; }
+
+    /* Center Bottom: Live Decoded Action */
+    #action-badge-panel {
+      bottom: 210px; left: 50%; transform: translateX(-50%);
+      text-align: center; padding: 8px 30px;
+    }
+    #action-title { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1.5px; }
+    #action-name {
+      font-size: 22px; font-weight: 900; color: var(--lime); letter-spacing: 2px;
+      text-shadow: 0 0 16px rgba(34, 197, 94, 0.6); margin-top: 2px;
+    }
+
+    /* Left Bottom: Connectome Anatomy & Plasticity */
+    #anatomy-panel {
+      bottom: 14px; left: 14px; width: 440px;
+    }
+    .neuropil-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; font-size: 11px; }
+    .neuropil-item { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+    .plasticity-box {
+      margin-top: 10px; padding: 10px; border-radius: 8px;
+      background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .plasticity-header { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; color: var(--gold); }
+    .dopamine-bar-wrap { margin-top: 6px; display: flex; align-items: center; gap: 8px; font-size: 11px; }
+    .dopamine-track { flex: 1; height: 8px; background: rgba(255,255,255,0.08); border-radius: 4px; position: relative; overflow: hidden; }
+    #dopamine-marker { height: 100%; width: 50%; background: var(--gold); transition: width 0.15s; }
+
+    /* Bottom: Training Progress & Learning Curves */
+    #progress-panel {
+      bottom: 14px; right: 14px; width: calc(100vw - 485px); max-width: 820px;
+    }
+    .chart-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 8px; }
+    .chart-box {
+      background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px; padding: 8px;
+    }
+    .chart-title { font-size: 10px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; display: flex; justify-content: space-between; }
+    canvas.mini-chart { width: 100%; height: 75px; display: block; margin-top: 4px; }
+
+    .action-bar-container { margin-top: 10px; }
+    .action-bar-track { width: 100%; height: 10px; border-radius: 5px; display: flex; overflow: hidden; background: rgba(255,255,255,0.06); }
+    .act-segment { height: 100%; transition: width 0.3s; }
+    .act-legend { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <!-- Top Left: Title & 3D Camera Controls -->
+  <div class="hud-panel" id="header-panel">
+    <div class="title-row">
+      <h1>🪰 FlySoul <span style="font-size: 12px; color: var(--cyan); font-weight: 500;">MaleCNS v1.0</span></h1>
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        <span id="sse-status">LIVE CONNECTOME</span>
+      </div>
+    </div>
+    <div class="subtitle">
+      Drosophila Melanogaster CNS (166k / 1.9k calibrated neurons) × SoulsGym Dark Souls III. 3-factor STDP dopamine reinforcement learning.
+    </div>
+    <div class="cam-controls">
+      <button class="cam-btn active" id="btn-front" onclick="setCameraView('front')">🔬 Frontal</button>
+      <button class="cam-btn" id="btn-dorsal" onclick="setCameraView('dorsal')">🧭 Dorsal</button>
+      <button class="cam-btn" id="btn-sagittal" onclick="setCameraView('sagittal')">🧬 Lateral</button>
+      <button class="cam-btn" id="btn-orbit" onclick="toggleOrbit()">🔄 Auto-Orbit: ON</button>
+      <button class="cam-btn" id="btn-shell" onclick="toggleShell()">👁️ Shell: ON</button>
+    </div>
+  </div>
+
+  <!-- Top Right: Dark Souls III Boss & Player Combat HUD -->
+  <div class="hud-panel" id="combat-panel">
+    <div class="panel-header">
+      <span>Boss Battle</span>
+      <span id="step-badge" style="font-weight: 700; color: #fff;">Step: 0</span>
+    </div>
+    <div class="boss-name">
+      <span>Iudex Gundyr</span>
+      <span class="boss-status-badge boss-status-idle" id="boss-alert-badge">IDLE</span>
+    </div>
+
+    <!-- Boss HP Bar -->
+    <div class="bar-group">
+      <div class="bar-label">
+        <span style="color: #f87171;">Boss HP</span>
+        <span id="boss-hp-val">100%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill bar-boss-hp" id="boss-hp-fill"></div>
+      </div>
+    </div>
+
+    <!-- Player HP & SP Bars -->
+    <div class="bar-group">
+      <div class="bar-label">
+        <span style="color: #f87171;">Fly Health (Player HP)</span>
+        <span id="player-hp-val">100%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill bar-player-hp" id="player-hp-fill"></div>
+      </div>
+    </div>
+
+    <div class="bar-group">
+      <div class="bar-label">
+        <span style="color: #34d399;">Stamina</span>
+        <span id="player-sp-val">100%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill bar-player-sp" id="player-sp-fill"></div>
+      </div>
+    </div>
+
+    <!-- Proximity & Step Telemetry -->
+    <div class="combat-grid">
+      <div class="combat-stat">
+        <div style="color: var(--text-muted);">Boss Proximity</div>
+        <div class="stat-val" id="boss-dist-val">-- m</div>
+      </div>
+      <div class="combat-stat">
+        <div style="color: var(--text-muted);">Cumulative Reward</div>
+        <div class="stat-val" id="reward-val">+0.00</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Center Active Action Badge -->
+  <div class="hud-panel" id="action-badge-panel">
+    <div id="action-title">Motor Command</div>
+    <div id="action-name">IDLE</div>
+  </div>
+
+  <!-- Bottom Left: Neuropil Anatomy & Dopaminergic Plasticity -->
+  <div class="hud-panel" id="anatomy-panel">
+    <div class="panel-header">
+      <span>MaleCNS Anatomical Neuropils</span>
+      <span id="active-neurons-val" style="color: var(--cyan); font-weight: 700;">0 Spikes</span>
+    </div>
+    <div class="neuropil-list">
+      <div class="neuropil-item"><span class="dot" style="background: var(--cyan);"></span> Optic Lobes (Retina/Medulla)</div>
+      <div class="neuropil-item"><span class="dot" style="background: var(--violet);"></span> Central Complex (EB / FB)</div>
+      <div class="neuropil-item"><span class="dot" style="background: var(--gold);"></span> Mushroom Body (Kenyon Cells)</div>
+      <div class="neuropil-item"><span class="dot" style="background: var(--crimson);"></span> Dopamine (PPL1 / PAM)</div>
+      <div class="neuropil-item"><span class="dot" style="background: var(--lime);"></span> Motor DNs (VNC T1-T3)</div>
+      <div class="neuropil-item"><span class="dot" style="background: #94a3b8;"></span> MBON Readout Circuit</div>
+    </div>
+
+    <!-- Three-Factor STDP Plasticity Tracker -->
+    <div class="plasticity-box">
+      <div class="plasticity-header">
+        <span>3-Factor STDP Plasticity</span>
+        <span id="mean-w-val" style="color: #fff;">W_avg: 1.50</span>
+      </div>
+      <div class="dopamine-bar-wrap">
+        <span>PPL1 (Aversive)</span>
+        <div class="dopamine-track">
+          <div id="dopamine-marker"></div>
+        </div>
+        <span>PAM (Reward)</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 6px;">
+        <span>LTD Events: <b id="ltd-count" style="color: var(--crimson);">0</b></span>
+        <span>LTP Events: <b id="ltp-count" style="color: var(--lime);">0</b></span>
+        <span>DA Burst: <b id="dopamine-val" style="color: var(--gold);">0.00x</b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Right: Training Progress & Learning Curves -->
+  <div class="hud-panel" id="progress-panel">
+    <div class="panel-header">
+      <span id="episode-badge" style="font-weight: 800; color: #fff;">EPISODE #1</span>
+      <span>SoulsGym Learning Curves</span>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-box">
+        <div class="chart-title">
+          <span>Survival Time</span>
+          <span id="max-steps-val">0 steps</span>
+        </div>
+        <canvas class="mini-chart" id="chart-survival"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">
+          <span>Cumulative Reward</span>
+          <span id="last-reward-val">0.0</span>
+        </div>
+        <canvas class="mini-chart" id="chart-reward"></canvas>
+      </div>
+      <div class="chart-box">
+        <div class="chart-title">
+          <span>KC→MBON Synaptic Drift</span>
+          <span id="drift-val">0.00%</span>
+        </div>
+        <canvas class="mini-chart" id="chart-plasticity"></canvas>
+      </div>
+    </div>
+
+    <!-- Action Breakdown -->
+    <div class="action-bar-container">
+      <div class="action-bar-track" id="action-bar-track">
+        <div class="act-segment" id="seg-roll" style="width: 20%; background: var(--cyan);" title="Dodge Roll"></div>
+        <div class="act-segment" id="seg-attack" style="width: 20%; background: var(--gold);" title="Attack"></div>
+        <div class="act-segment" id="seg-parry" style="width: 15%; background: var(--violet);" title="Parry/Block"></div>
+        <div class="act-segment" id="seg-move" style="width: 15%; background: var(--lime);" title="Movement"></div>
+        <div class="act-segment" id="seg-idle" style="width: 30%; background: #334155;" title="Idle"></div>
+      </div>
+      <div class="act-legend">
+        <span><span class="dot" style="background: var(--cyan); width: 6px; height: 6px;"></span> Roll: <b id="pct-roll">0%</b></span>
+        <span><span class="dot" style="background: var(--gold); width: 6px; height: 6px;"></span> Attack: <b id="pct-attack">0%</b></span>
+        <span><span class="dot" style="background: var(--violet); width: 6px; height: 6px;"></span> Parry: <b id="pct-parry">0%</b></span>
+        <span><span class="dot" style="background: var(--lime); width: 6px; height: 6px;"></span> Move: <b id="pct-move">0%</b></span>
+        <span><span class="dot" style="background: #334155; width: 6px; height: 6px;"></span> Idle: <b id="pct-idle">0%</b></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // 1. Three.js Anatomical Fruit Fly Brain Scene Setup
+    // -------------------------------------------------------------
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x04070c, 0.0018);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 3000);
+    camera.position.set(0, 150, 480);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.8;
+
+    // Ambient and point illumination
+    const ambLight = new THREE.AmbientLight(0x0ea5e9, 0.45);
+    scene.add(ambLight);
+
+    const keyLight = new THREE.PointLight(0x00f0ff, 1.5, 800);
+    keyLight.position.set(200, 300, 300);
+    scene.add(keyLight);
+
+    const fillLight = new THREE.PointLight(0xd946ef, 1.2, 800);
+    fillLight.position.set(-200, -100, -200);
+    scene.add(fillLight);
+
+    // -------------------------------------------------------------
+    // 2. Anatomical Drosophila Brain Silhouette / Cortical Hologram
+    // -------------------------------------------------------------
+    const shellGroup = new THREE.Group();
+    scene.add(shellGroup);
+
+    const shellMat = new THREE.MeshPhysicalMaterial({
+      color: 0x00f0ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.12,
+      roughness: 0.2,
+      metalness: 0.8,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    // Left Optic Lobe outer curved shell (Medulla/Lobula)
+    const leftOpticGeo = new THREE.SphereGeometry(78, 24, 18);
+    leftOpticGeo.scale(1.2, 1.1, 0.75);
+    const leftOpticMesh = new THREE.Mesh(leftOpticGeo, shellMat);
+    leftOpticMesh.position.set(-165, 10, 0);
+    leftOpticMesh.rotation.z = -0.25;
+    leftOpticMesh.rotation.y = 0.35;
+    shellGroup.add(leftOpticMesh);
+
+    // Right Optic Lobe outer curved shell (Medulla/Lobula)
+    const rightOpticGeo = new THREE.SphereGeometry(78, 24, 18);
+    rightOpticGeo.scale(1.2, 1.1, 0.75);
+    const rightOpticMesh = new THREE.Mesh(rightOpticGeo, shellMat);
+    rightOpticMesh.position.set(165, 10, 0);
+    rightOpticMesh.rotation.z = 0.25;
+    rightOpticMesh.rotation.y = -0.35;
+    shellGroup.add(rightOpticMesh);
+
+    // Central Protocerebrum dome
+    const protoGeo = new THREE.SphereGeometry(88, 28, 20);
+    protoGeo.scale(1.15, 0.9, 0.85);
+    const protoMesh = new THREE.Mesh(protoGeo, shellMat);
+    protoMesh.position.set(0, 20, 10);
+    shellGroup.add(protoMesh);
+
+    // Mushroom Body Calyx lobes (Dorsolateral posterior)
+    const calyxLeftGeo = new THREE.SphereGeometry(32, 16, 12);
+    const calyxLeft = new THREE.Mesh(calyxLeftGeo, shellMat);
+    calyxLeft.position.set(-60, 52, 38);
+    shellGroup.add(calyxLeft);
+
+    const calyxRight = new THREE.Mesh(calyxLeftGeo, shellMat);
+    calyxRight.position.set(60, 52, 38);
+    shellGroup.add(calyxRight);
+
+    // Ventral Nerve Cord (VNC) spinal column descending into thorax
+    const vncGeo = new THREE.CylinderGeometry(20, 28, 140, 16, 8, true);
+    const vncMesh = new THREE.Mesh(vncGeo, shellMat);
+    vncMesh.position.set(0, -95, -10);
+    shellGroup.add(vncMesh);
+
+    // -------------------------------------------------------------
+    // 3. Connectome Point Cloud & Synaptic Filaments
+    // -------------------------------------------------------------
+    let neuronParticles = null;
+    let neuronColors = null;
+    let defaultColors = [];
+    let numNeurons = 0;
+
+    // Glowing circle particle texture for calcium imaging GFP bloom
+    const pCanvas = document.createElement('canvas');
+    pCanvas.width = 64; pCanvas.height = 64;
+    const pCtx = pCanvas.getContext('2d');
+    const radGrad = pCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    radGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    radGrad.addColorStop(0.25, 'rgba(0, 240, 255, 0.9)');
+    radGrad.addColorStop(0.6, 'rgba(0, 160, 255, 0.35)');
+    radGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    pCtx.fillStyle = radGrad;
+    pCtx.fillRect(0, 0, 64, 64);
+    const particleTexture = new THREE.CanvasTexture(pCanvas);
+
+    // Load topology from server
+    fetch('/api/topology')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.coords) return;
+        numNeurons = data.num_neurons;
+        const geometry = new THREE.BufferGeometry();
+        const positions = [];
+        const colors = [];
+
+        // Color palettes per MaleCNS neuropil
+        const palette = {
+          'Retina_OpticLobe': [0.0, 0.94, 1.0],      // Electric Cyan
+          'Lobula_Motion':    [0.08, 0.72, 0.65],    // Teal
+          'Compass_EB':       [0.85, 0.27, 0.94],    // Electric Violet
+          'Central_Complex':  [0.72, 0.15, 0.88],    // Magenta
+          'Kenyon_Cell':      [0.96, 0.62, 0.04],    // Amber Gold
+          'MBON':             [0.90, 0.80, 0.50],    // Sand Gold
+          'Dopamine_PPL1':    [0.96, 0.25, 0.37],    // Crimson
+          'Dopamine_PAM':     [1.0, 0.40, 0.20],     // Coral
+          'Nociceptor':       [0.99, 0.10, 0.10],    // Deep Red
+          'Motor_':           [0.13, 0.77, 0.37],    // Acid Green
+        };
+
+        for (let i = 0; i < numNeurons; i++) {
+          const pt = data.coords[i];
+          positions.push(pt[0], pt[1], pt[2]);
+
+          const label = data.labels[i] || '';
+          let c = [0.0, 0.94, 1.0];
+          for (let key in palette) {
+            if (label.startsWith(key)) {
+              c = palette[key];
+              break;
+            }
+          }
+          colors.push(c[0], c[1], c[2]);
+          defaultColors.push([...c]);
+        }
+
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+          size: 7.2,
+          vertexColors: true,
+          map: particleTexture,
+          transparent: true,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+
+        neuronParticles = new THREE.Points(geometry, material);
+        scene.add(neuronParticles);
+        neuronColors = neuronParticles.geometry.attributes.color;
+
+        // Synaptic Filaments
+        const lineGeo = new THREE.BufferGeometry();
+        const linePos = [];
+        const edges = data.edges || [];
+        for (let e of edges) {
+          const u = e[0], v = e[1];
+          linePos.push(
+            data.coords[u][0], data.coords[u][1], data.coords[u][2],
+            data.coords[v][0], data.coords[v][1], data.coords[v][2]
+          );
+        }
+        lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+        const lineMat = new THREE.LineBasicMaterial({
+          color: 0x0284c7,
+          transparent: true,
+          opacity: 0.14,
+          blending: THREE.AdditiveBlending,
+        });
+        const filaments = new THREE.LineSegments(lineGeo, lineMat);
+        scene.add(filaments);
+      });
+
+    // -------------------------------------------------------------
+    // 4. Interactive Camera Views
+    // -------------------------------------------------------------
+    function setCameraView(view) {
+      document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
+      const btn = document.getElementById('btn-' + view);
+      if (btn) btn.classList.add('active');
+
+      if (view === 'front') {
+        gsapAnimateCam(0, 10, 480, 0, 0, 0);
+      } else if (view === 'dorsal') {
+        gsapAnimateCam(0, 480, 30, 0, 0, 0);
+      } else if (view === 'sagittal') {
+        gsapAnimateCam(480, 20, 10, 0, 0, 0);
+      }
+    }
+
+    function gsapAnimateCam(tx, ty, tz, lx, ly, lz) {
+      camera.position.set(tx, ty, tz);
+      controls.target.set(lx, ly, lz);
+      controls.update();
+    }
+
+    function toggleOrbit() {
+      controls.autoRotate = !controls.autoRotate;
+      document.getElementById('btn-orbit').innerText = `🔄 Auto-Orbit: ${controls.autoRotate ? 'ON' : 'OFF'}`;
+    }
+
+    function toggleShell() {
+      shellGroup.visible = !shellGroup.visible;
+      document.getElementById('btn-shell').innerText = `👁️ Shell: ${shellGroup.visible ? 'ON' : 'OFF'}`;
+    }
+
+    // -------------------------------------------------------------
+    // 5. Dynamic Learning Curve Charts (HTML5 Canvas)
+    // -------------------------------------------------------------
+    const survivalData = [];
+    const rewardData = [];
+    const plasticityData = [];
+
+    function drawSparkline(canvasId, data, color, fillGrad) {
+      const c = document.getElementById(canvasId);
+      if (!c) return;
+      const ctx = c.getContext('2d');
+      const w = c.clientWidth;
+      const h = c.clientHeight;
+      c.width = w; c.height = h;
+
+      ctx.clearRect(0, 0, w, h);
+      if (data.length < 2) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '10px monospace';
+        ctx.fillText('Accumulating episodes...', 10, h / 2 + 3);
+        return;
+      }
+
+      const minVal = Math.min(...data);
+      const maxVal = Math.max(...data);
+      const range = (maxVal - minVal) || 1;
+
+      // Draw grid lines
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, h * 0.25); ctx.lineTo(w, h * 0.25);
+      ctx.moveTo(0, h * 0.75); ctx.lineTo(w, h * 0.75);
+      ctx.stroke();
+
+      // Plot line
+      ctx.beginPath();
+      for (let i = 0; i < data.length; i++) {
+        const x = (i / (data.length - 1)) * (w - 12) + 6;
+        const y = h - 8 - ((data[i] - minVal) / range) * (h - 16);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Fill area under curve
+      ctx.lineTo((w - 6), h);
+      ctx.lineTo(6, h);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, fillGrad);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Draw latest point circle
+      const lastX = w - 6;
+      const lastY = h - 8 - ((data[data.length - 1] - minVal) / range) * (h - 16);
+      ctx.beginPath();
+      ctx.arc(lastX, lastY, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // -------------------------------------------------------------
+    // 6. Real-Time Telemetry via Server-Sent Events (SSE)
+    // -------------------------------------------------------------
+    const evtSource = new EventSource('/api/stream');
+
+    evtSource.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+
+      // Episode summary event
+      if (data.type === 'episode_summary') {
+        if (data.history && data.history.length > 0) {
+          survivalData.length = 0;
+          rewardData.length = 0;
+          plasticityData.length = 0;
+          for (let item of data.history) {
+            survivalData.push(item.steps);
+            rewardData.push(item.reward);
+            plasticityData.push(item.mean_weight || 1.5);
+          }
+          drawSparkline('chart-survival', survivalData, '#00f0ff', 'rgba(0, 240, 255, 0.25)');
+          drawSparkline('chart-reward', rewardData, '#22c55e', 'rgba(34, 197, 94, 0.25)');
+          drawSparkline('chart-plasticity', plasticityData, '#f59e0b', 'rgba(245, 158, 11, 0.25)');
+
+          const maxSteps = Math.max(...survivalData);
+          document.getElementById('max-steps-val').innerText = `${maxSteps} steps`;
+          document.getElementById('last-reward-val').innerText = (data.reward >= 0 ? '+' : '') + data.reward.toFixed(2);
+          const drift = (((data.mean_weight || 1.5) - 1.5) / 1.5 * 100).toFixed(1);
+          document.getElementById('drift-val').innerText = `${drift >= 0 ? '+' : ''}${drift}%`;
+        }
+      }
+
+      // Step telemetry
+      if (data.episode !== undefined) {
+        document.getElementById('episode-badge').innerText = `EPISODE #${data.episode}`;
+      }
+      if (data.step !== undefined) {
+        document.getElementById('step-badge').innerText = `Step: ${data.step}`;
+      }
+      if (data.active_neurons !== undefined) {
+        document.getElementById('active-neurons-val').innerText = `${data.active_neurons.toLocaleString()} Spikes`;
+      }
+      if (data.cumulative_reward !== undefined) {
+        document.getElementById('reward-val').innerText = (data.cumulative_reward >= 0 ? '+' : '') + data.cumulative_reward.toFixed(2);
+      }
+
+      // Health & Stamina
+      if (data.player_hp !== undefined) {
+        const p_hp = Math.round(data.player_hp * 100);
+        document.getElementById('player-hp-val').innerText = `${p_hp}%`;
+        document.getElementById('player-hp-fill').style.width = `${p_hp}%`;
+      }
+      if (data.boss_hp !== undefined) {
+        const b_hp = Math.round(data.boss_hp * 100);
+        document.getElementById('boss-hp-val').innerText = `${b_hp}%`;
+        document.getElementById('boss-hp-fill').style.width = `${b_hp}%`;
+      }
+      if (data.player_sp !== undefined) {
+        const p_sp = Math.round(data.player_sp * 100);
+        document.getElementById('player-sp-val').innerText = `${p_sp}%`;
+        document.getElementById('player-sp-fill').style.width = `${p_sp}%`;
+      }
+
+      // Boss Proximity & Attack Alert
+      if (data.boss_distance !== undefined) {
+        document.getElementById('boss-dist-val').innerText = `${data.boss_distance.toFixed(1)}m`;
+      }
+      const bBadge = document.getElementById('boss-alert-badge');
+      if (data.boss_attacking) {
+        bBadge.innerText = '⚠️ ATTACKING!';
+        bBadge.className = 'boss-status-badge boss-status-attack';
+      } else {
+        bBadge.innerText = 'IDLE';
+        bBadge.className = 'boss-status-badge boss-status-idle';
+      }
+
+      // Decoded Action
+      if (data.action_name) {
+        const actName = data.action_name.toUpperCase().replace('_', ' ');
+        const actElem = document.getElementById('action-name');
+        actElem.innerText = actName;
+        if (actName.includes('ROLL')) actElem.style.color = '#00f0ff';
+        else if (actName.includes('ATTACK')) actElem.style.color = '#f59e0b';
+        else if (actName.includes('PARRY') || actName.includes('BLOCK')) actElem.style.color = '#d946ef';
+        else if (actName.includes('STEP')) actElem.style.color = '#14b8a6';
+        else actElem.style.color = '#22c55e';
+      }
+
+      // Plasticity & Dopamine
+      if (data.dopamine !== undefined) {
+        const dop = data.dopamine;
+        document.getElementById('dopamine-val').innerText = `${dop >= 0 ? '+' : ''}${dop.toFixed(2)}x`;
+        const pct = Math.max(0, Math.min(100, (dop + 1.0) * 50));
+        document.getElementById('dopamine-marker').style.width = `${pct}%`;
+      }
+      if (data.mean_weight !== undefined) {
+        document.getElementById('mean-w-val').innerText = `W_avg: ${data.mean_weight.toFixed(2)}`;
+      }
+      if (data.total_ltp !== undefined) {
+        document.getElementById('ltp-count').innerText = data.total_ltp;
+      }
+      if (data.total_ltd !== undefined) {
+        document.getElementById('ltd-count').innerText = data.total_ltd;
+      }
+
+      // Action Distribution Breakdown
+      if (data.action_counts) {
+        const counts = data.action_counts;
+        const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+        const rollC = (counts['dodge_roll'] || 0);
+        const atkC = (counts['attack_light'] || 0) + (counts['attack_heavy'] || 0);
+        const parryC = (counts['block_parry'] || 0);
+        const moveC = (counts['turn_left'] || 0) + (counts['turn_right'] || 0) + (counts['step_back'] || 0);
+        const idleC = (counts['idle'] || 0);
+
+        const rPct = Math.round((rollC / total) * 100);
+        const aPct = Math.round((atkC / total) * 100);
+        const pPct = Math.round((parryC / total) * 100);
+        const mPct = Math.round((moveC / total) * 100);
+        const iPct = Math.max(0, 100 - (rPct + aPct + pPct + mPct));
+
+        document.getElementById('pct-roll').innerText = `${rPct}%`;
+        document.getElementById('pct-attack').innerText = `${aPct}%`;
+        document.getElementById('pct-parry').innerText = `${pPct}%`;
+        document.getElementById('pct-move').innerText = `${mPct}%`;
+        document.getElementById('pct-idle').innerText = `${iPct}%`;
+
+        document.getElementById('seg-roll').style.width = `${rPct}%`;
+        document.getElementById('seg-attack').style.width = `${aPct}%`;
+        document.getElementById('seg-parry').style.width = `${pPct}%`;
+        document.getElementById('seg-move').style.width = `${mPct}%`;
+        document.getElementById('seg-idle').style.width = `${iPct}%`;
+      }
+
+      // Flash Spiking Neurons in 3D (Action Potentials)
+      if (neuronParticles && neuronColors && data.spikes && data.spikes.length > 0) {
+        const spikeSet = new Set(data.spikes);
+        for (let i = 0; i < numNeurons; i++) {
+          if (spikeSet.has(i)) {
+            // Flash radiant white/bloom
+            neuronColors.array[i * 3 + 0] = 1.0;
+            neuronColors.array[i * 3 + 1] = 1.0;
+            neuronColors.array[i * 3 + 2] = 1.0;
+          } else {
+            // Smoothly decay back to base color
+            neuronColors.array[i * 3 + 0] = defaultColors[i][0] * 0.88;
+            neuronColors.array[i * 3 + 1] = defaultColors[i][1] * 0.88;
+            neuronColors.array[i * 3 + 2] = defaultColors[i][2] * 0.88;
+          }
+        }
+        neuronColors.needsUpdate = true;
+      }
+    };
+
+    // -------------------------------------------------------------
+    // 7. Render Loop
+    // -------------------------------------------------------------
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

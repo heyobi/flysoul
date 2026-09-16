@@ -11,8 +11,11 @@ import queue
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
+
+HTML_PATH = Path(__file__).parent / "index.html"
 
 from flysoul.connectome.graph import CircuitTopology
 
@@ -432,7 +435,14 @@ class VisualizerHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(INDEX_HTML.encode("utf-8"))
+            if HTML_PATH.exists():
+                try:
+                    content = HTML_PATH.read_text(encoding="utf-8")
+                except Exception:
+                    content = INDEX_HTML
+            else:
+                content = INDEX_HTML
+            self.wfile.write(content.encode("utf-8"))
 
         elif self.path == "/api/topology":
             self.send_response(200)

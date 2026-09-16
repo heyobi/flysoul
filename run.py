@@ -170,6 +170,8 @@ def main():
     if args.continuous:
         console.print("[bold cyan]🔄 Running in continuous combat loop. Press Ctrl+C to stop.[/bold cyan]")
 
+    episode_history = []
+    global_action_counts = {}
     ep = 0
     while ep < total_episodes:
         ep += 1
@@ -211,6 +213,7 @@ def main():
                     # 6. Extract telemetry & broadcast to 3D Web Visualizer
                     active_count = int(np.count_nonzero(spike_counts))
                     player_hp_pct, player_sp_pct, boss_hp_pct, distance, boss_attacking, boss_state = extract_combat_metrics(obs, info)
+                    global_action_counts[action_name] = global_action_counts.get(action_name, 0) + 1
 
                     if enable_web:
                         spikes = np.where(spike_counts > 0)[0].tolist()
@@ -227,6 +230,11 @@ def main():
                             "active_neurons": active_count,
                             "cumulative_reward": ep_reward,
                             "spikes": spikes,
+                            "mean_weight": round(float(plasticity.mean_plastic_weight), 3),
+                            "total_ltp": plasticity.total_ltp_events,
+                            "total_ltd": plasticity.total_ltd_events,
+                            "action_counts": global_action_counts,
+                            "history": episode_history[-20:],
                         })
 
                     layout = dashboard.create_layout(
@@ -256,6 +264,7 @@ def main():
                 action_id, action_name, motor_rates = decoder.decode(
                     spike_counts, explore=args.explore
                 )
+                global_action_counts[action_name] = global_action_counts.get(action_name, 0) + 1
                 step_action = decoder.to_soulsgym_action(action_id) if args.game else action_id
                 obs, reward, terminated, truncated, info = env.step(step_action)
                 ep_reward += reward
@@ -280,11 +289,45 @@ def main():
                         "active_neurons": active_count,
                         "cumulative_reward": ep_reward,
                         "spikes": spikes,
+                        "mean_weight": round(float(plasticity.mean_plastic_weight), 3),
+                        "total_ltp": plasticity.total_ltp_events,
+                        "total_ltd": plasticity.total_ltd_events,
+                        "action_counts": global_action_counts,
+                        "history": episode_history[-20:],
                     })
-
+                if step % 50 == 0:
+                    console.print(
+                        f"  [Fly] Step {step:4d} | Action: {action_name:<14} | Dist: {distance:.1f}m | "
+                        f"HP: {int(player_hp_pct*100)}% | Boss: {int(boss_hp_pct*100)}% | DA: {plasticity.dopamine_level:.2f}"
+                    )
         # Episode summary
         boss_hp_raw = info.get("boss_hp_raw", int(boss_hp_pct * 1037) if 'boss_hp_pct' in locals() else 0)
         player_hp_raw = info.get("player_hp_raw", int(player_hp_pct * 1000) if 'player_hp_pct' in locals() else 0)
+
+        ep_summary = {
+            "episode": ep,
+            "steps": step,
+            "reward": round(ep_reward, 2),
+            "boss_hp_pct": round(boss_hp_pct, 3),
+            "player_hp_pct": round(player_hp_pct, 3),
+            "victory": boss_hp_raw <= 0,
+            "mean_weight": round(float(plasticity.mean_plastic_weight), 3),
+        }
+        episode_history.append(ep_summary)
+
+        if enable_web:
+            broadcast_event({
+                "type": "episode_summary",
+                "episode": ep,
+                "steps": step,
+                "reward": ep_reward,
+                "history": episode_history[-25:],
+                "victories": victories,
+                "mean_weight": float(plasticity.mean_plastic_weight),
+                "total_ltp": plasticity.total_ltp_events,
+                "total_ltd": plasticity.total_ltd_events,
+                "action_counts": global_action_counts,
+            })
 
         if boss_hp_raw <= 0:
             victories += 1

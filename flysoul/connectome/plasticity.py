@@ -34,6 +34,9 @@ class DopaminePlasticity:
 
         # Dopamine reservoir state
         self.dopamine_level = 0.0  # Normalized [-1.0, 1.0]: negative = aversive, positive = reward
+        self.total_ltp_events = 0
+        self.total_ltd_events = 0
+        self.initial_mean_weight = self.mean_plastic_weight
 
     def update_traces(self, spike_counts: np.ndarray, decay: float = 0.85):
         """Update synaptic eligibility traces based on co-activation of pre- and post-neurons."""
@@ -75,8 +78,20 @@ class DopaminePlasticity:
         new_w = np.clip(current_w + delta_w, self.w_min, self.w_max)
         self.topology.weight[self.plastic_mask] = new_w.astype(np.float32)
 
+        if self.dopamine_level > 0:
+            self.total_ltp_events += int(np.count_nonzero(delta_w > 1e-4))
+        elif self.dopamine_level < 0:
+            self.total_ltd_events += int(np.count_nonzero(delta_w < -1e-4))
+
         # Clear eligibility upon reinforcement delivery
         self.eligibility.fill(0.0)
+
+    @property
+    def mean_plastic_weight(self) -> float:
+        """Return average synaptic weight across all KC -> MBON synapses."""
+        if not hasattr(self, "plastic_mask") or np.count_nonzero(self.plastic_mask) == 0:
+            return 1.5
+        return float(np.mean(self.topology.weight[self.plastic_mask]))
 
     def reset(self):
         """Reset eligibility traces and dopamine level."""
