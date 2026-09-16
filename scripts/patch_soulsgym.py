@@ -1,5 +1,6 @@
-"""Patch soulsgym on Linux to handle Gundyr's Event30002 animation gracefully."""
+"""Patch soulsgym on Linux to handle Gundyr's Event30002 animation, fog wall, and camera reset gracefully."""
 
+import time
 from pathlib import Path
 
 def patch():
@@ -9,10 +10,21 @@ def patch():
         text = p1.read_text(encoding="utf-8")
         if '("Walk", "Idle")' in text:
             text = text.replace('("Walk", "Idle")', '("Walk", "Idle", "Event")')
-            p1.write_text(text, encoding="utf-8")
             print("[+] Patched soulsgym iudex.py: allowed Event in boss animations")
-        else:
-            print("[*] iudex.py already patched")
+
+        target_fog = 'post_fog_wall_pos = self.game.data.coordinates[self.ENV_ID]["post_fog_wall"][:3]'
+        replacement_fog = 'self.game.player_pose = self.game.data.coordinates[self.ENV_ID]["post_fog_wall"]\n        post_fog_wall_pos = self.game.data.coordinates[self.ENV_ID]["post_fog_wall"][:3]'
+        if target_fog in text and 'self.game.player_pose = self.game.data.coordinates[self.ENV_ID]["post_fog_wall"]' not in text:
+            text = text.replace(target_fog, replacement_fog, 1)
+            print("[+] Patched soulsgym iudex.py: auto-teleport post_fog_wall")
+
+        target_cam = 'while not self.game.lock_on:'
+        replacement_cam = 't_cam = time.time()\n        while not self.game.lock_on and (time.time() - t_cam < 1.5):'
+        if target_cam in text:
+            text = text.replace(target_cam, replacement_cam, 1)
+            print("[+] Patched soulsgym iudex.py: added 1.5s timeout to camera lock_on")
+
+        p1.write_text(text, encoding="utf-8")
 
     # 2. Patch darksouls3.py
     p2 = Path("/home/ibox/flysoul/venv/lib/python3.12/site-packages/soulsgym/games/darksouls3.py")
