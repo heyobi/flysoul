@@ -269,7 +269,7 @@
     <div class="eyebrow row"><span>Dark Souls III · live capture</span>
       <button class="btn" id="feed-btn" onclick="toggleFeed()" style="padding:2px 8px">Hide</button></div>
     <div id="feed-body">
-      <img id="feed-img" src="/api/video_feed" alt="" onerror="feedError(this)">
+      <img id="feed-img" alt="" onload="feedTick(true)" onerror="feedTick(false)">
       <div class="nofeed" id="nofeed" style="display:none">no video</div>
     </div>
   </section>
@@ -615,7 +615,20 @@ function toggleFeed() {
   const b = document.getElementById('feed-body'), btn = document.getElementById('feed-btn');
   const hide = b.style.display !== 'none'; b.style.display = hide ? 'none' : 'block'; btn.textContent = hide ? 'Show' : 'Hide';
 }
-function feedError(img) { document.getElementById('nofeed').style.display = 'grid'; setTimeout(() => { img.src = '/api/frame.jpg?t=' + Date.now(); }, 1500); }
+// The live capture polls single frames instead of holding an MJPEG stream open. A
+// stream dies silently when the agent restarts and leaves one frozen frame on screen;
+// polling just carries on, and slows down while the feed is hidden or the tab is not
+// visible so it never competes with the fight for bandwidth.
+let feedFails = 0;
+function feedTick(ok) {
+  const img = document.getElementById('feed-img');
+  feedFails = ok ? 0 : feedFails + 1;
+  document.getElementById('nofeed').style.display = feedFails > 8 ? 'grid' : 'none';
+  const idle = document.getElementById('feed-body').style.display === 'none' || document.hidden;
+  const delay = idle ? 1000 : (ok ? 120 : 800);
+  setTimeout(() => { img.src = '/api/frame.jpg?t=' + Date.now(); }, delay);
+}
+feedTick(false);
 function setTab(t) {
   document.body.dataset.tab = t;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.id === 't-' + t));

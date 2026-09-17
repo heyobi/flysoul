@@ -605,6 +605,42 @@ def settle_connectome(engine, encoder, obs, info, seconds: float = 2.0):
     encoder.reset(state.player_hp, state.distance)
 
 
+def recover_game_window(env, console):
+    """Put the game back in front and in focus before retrying a failed reset.
+
+    Every key the agent sends goes to whichever X window has focus. A stray press from
+    a remote viewer (the Steam/Guide button through Moonlight, for instance) opens Steam
+    Big Picture over the game; from then on the reset's key presses land in Steam, the
+    arena setup fails five times over, and the fight never resumes - measured live, 8
+    minutes of a stalled agent that a human had to notice. Closing Big Picture is
+    harmless when it is not open, and focusing the game is what the reset assumes.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("steam"):
+        try:
+            subprocess.Popen(
+                ["steam", "steam://close/bigpicture"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            time.sleep(2.0)
+        except Exception:
+            pass
+    window = getattr(env.unwrapped, "_game_window", None)
+    if window is None:
+        return
+    try:
+        if not window.focused:
+            window.focus()
+            time.sleep(0.5)
+            console.print(
+                f"[dim]game window refocused (focused={window.focused})[/dim]"
+            )
+    except Exception:
+        pass
+
+
 def reset_episode(env, console, use_mock):
     """Reset the environment, rebuilding it if the live game refuses to come back."""
     for attempt in range(5):
@@ -614,6 +650,8 @@ def reset_episode(env, console, use_mock):
         except Exception as e:
             console.print(f"[yellow]WARNING env.reset() retry {attempt + 1}/5: {e}[/yellow]")
             release_all_keys()
+            if not use_mock:
+                recover_game_window(env, console)
             time.sleep(1.2)
     console.print("[bold yellow]WARNING Re-initializing environment after reset failure...[/bold yellow]")
     try:
