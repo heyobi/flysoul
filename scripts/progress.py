@@ -14,8 +14,10 @@ import re
 import sys
 from pathlib import Path
 
+# A victory line reads "VICTORY ... Fly HP left: 13%" and carries no boss HP, which is
+# zero by definition; the pattern must not drop exactly the episodes that matter most.
 EPISODE_RE = re.compile(
-    r"EPISODE #(\d+).*?(?:Boss HP left|Remaining Boss HP):\s*(\d+)%.*?"
+    r"EPISODE #(\d+).*?(?:(?:Boss HP left|Remaining Boss HP):\s*(\d+)%|VICTORY).*?"
     r"Steps:\s*(\d+).*?Reward:\s*([-+0-9.]+)",
     re.S,
 )
@@ -37,7 +39,7 @@ def parse(text: str):
         mix = {k: int(v) for k, v in MIX_RE.findall(tail)}
         episodes.append({
             "ep": int(m.group(1)),
-            "boss": int(m.group(2)),
+            "boss": int(m.group(2)) if m.group(2) else 0,
             "steps": int(m.group(3)),
             "reward": float(m.group(4)),
             "hits": int(hits.group(1)) if hits else 0,

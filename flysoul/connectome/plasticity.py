@@ -33,7 +33,7 @@ class DopaminePlasticity:
         w_max_factor: float = 4.0,
         eligibility_decay: float = 0.92,
         credit_decay: float = 0.82,
-        scaling_deadband: float = 0.35,
+        scaling_deadband: float = 0.15,
         scaling_rate: float = 0.02,
         rpe_scale: float = 0.0,
         rpe_baseline_rate: float = 0.02,
@@ -228,29 +228,39 @@ class DopaminePlasticity:
         self._homeostatic_scaling()
 
     def _homeostatic_scaling(self):
-        """Guard rail keeping a compartment from saturating or going permanently silent.
+        """Guard rail keeping the plastic synapses from inflating or going silent.
 
-        This must not be a constant pull towards baseline. The descending readout depends
-        on how much total drive a compartment delivers, so renormalising that total after
-        every dopamine event erases precisely the difference learning just created: run
-        for a hundred episodes that way and every compartment ends up back within a
-        percent of every other. It therefore only engages outside a wide dead band, and
-        gently even then.
+        It scales every KC->MBON synapse by the same factor, so that what learning has
+        made different stays different and only the overall level is held. The readout
+        that turns these weights into behaviour is a competition between compartments,
+        and a competition only carries information in the differences.
+
+        The earlier version of this capped each compartment on its own. Measured after
+        two hundred live fights, five of the eight compartments sat at exactly the cap,
+        1/(1 - deadband) times their baseline, indistinguishable from one another: every
+        action the fly executed had been pumped up until it hit the ceiling, and the
+        ceiling then erased the very preferences the dopamine had written. From that
+        point on nothing the fly experienced could change what it did, and more
+        experience (or replaying it in sleep) only pressed harder against the wall.
+
+        Uniform scaling still must not be a constant pull, because the descending pools
+        are tuned to an absolute level of drive; it engages only outside the dead band,
+        and gently even then.
         """
         weights = self.topology.weight
-        for c in range(self.num_channels):
-            baseline = self._baseline[c]
-            sel = self._channel_edges[c]
-            if baseline <= 0.0 or len(sel) == 0:
-                continue
-            total = float(np.sum(weights[sel]))
-            if total <= 1e-6:
-                continue
-            ratio = baseline / total
-            if 1.0 - self.scaling_deadband <= ratio <= 1.0 + self.scaling_deadband:
-                continue
-            scale = 1.0 + self.scaling_rate * (ratio - 1.0)
-            weights[sel] = np.clip(weights[sel] * scale, self.w_min, self.w_max).astype(np.float32)
+        if len(self.edges) == 0:
+            return
+        baseline = float(np.sum(self._baseline))
+        total = float(np.sum(weights[self.edges]))
+        if baseline <= 0.0 or total <= 1e-6:
+            return
+        ratio = baseline / total
+        if 1.0 - self.scaling_deadband <= ratio <= 1.0 + self.scaling_deadband:
+            return
+        scale = 1.0 + self.scaling_rate * (ratio - 1.0)
+        weights[self.edges] = np.clip(
+            weights[self.edges] * scale, self.w_min, self.w_max
+        ).astype(np.float32)
 
     # ------------------------------------------------------------------ readout
 
