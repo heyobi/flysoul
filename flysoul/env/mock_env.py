@@ -262,12 +262,16 @@ class MockIudexEnv(gym.Env):
         return reward
 
     def _resolve_strike(self, rng) -> float:
+        # Avoiding a hit pays nothing, exactly as in SoulsGym: its reward covers damage
+        # dealt, damage taken and death, and nothing else. Paying a bonus for a dodge
+        # here would make dodging look far easier to learn offline than it is in the
+        # game, which is precisely the mistake this environment exists to avoid.
         if self.distance > _BOSS_REACH:
             return 0.0
         if self.player_iframes > 0:
-            return 0.5  # Rolled through it.
+            return 0.0  # Rolled through it - the reward is simply the damage not taken.
         if self._strafed and rng.random() < 0.4:
-            return 0.25  # Circled out of the arc.
+            return 0.0  # Circled out of the arc.
         if self.player_blocking:
             chip = self.boss_attack_damage * 0.2
             self.player_hp = max(0.0, self.player_hp - chip)

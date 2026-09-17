@@ -256,3 +256,28 @@ def test_lock_on_state_is_read_from_the_observation():
     assert parse_obs(obs, info).lock_on is True
     env.unwrapped.lock_on = False
     assert parse_obs(env.unwrapped.obs, info).lock_on is False
+
+
+def test_unlocked_camera_keeps_the_attacks_available(agent):
+    """Losing lock-on must narrow the options, not empty them.
+
+    Holding position stops the fly sprinting off camera-relative, but standing still in
+    front of Iudex is its own way to lose: measured on the live game, the episodes where
+    lock-on dropped were the episodes that went 53-61% idle and landed almost nothing.
+    Attacks swing where the body already faces, so they stay usable.
+    """
+    topology, _, _, decoder, _ = agent
+    full = sorted(WALK_IDS | ROLL_IDS | ATTACK_IDS | {IDLE_ID})
+
+    locked = decoder.channels_for_valid_actions(full, lock_on=True)
+    assert "advance" in locked and "roll" in locked and "attack_light" in locked
+
+    unlocked = decoder.channels_for_valid_actions(full, lock_on=False)
+    assert unlocked == {"attack_light", "attack_heavy", "parry"}
+    assert "advance" not in unlocked, "camera-relative walking must stay blocked"
+    assert "roll" not in unlocked, "camera-relative rolling must stay blocked"
+
+    # And the mapping still refuses to issue a directional action if one slips through.
+    rates = {c: 0.0 for c in ACTION_CHANNELS}
+    assert decoder.to_game_action("advance", rates, lock_on=False)[0] == IDLE_ID
+    assert decoder.to_game_action("attack_light", rates, lock_on=False)[0] == 16

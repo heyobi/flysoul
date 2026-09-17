@@ -20,6 +20,48 @@ VENV = Path("/home/ibox/flysoul/venv/lib/python3.12/site-packages/soulsgym")
 CAMERA_TIMEOUT = 12.0
 
 
+CAMERA_RESET = '''    def _camera_reset(self, timeout: float = %s) -> bool:
+        """Turn the camera onto the boss and lock on. Returns True if the lock holds.
+
+        (flysoul patch) The camera, not the character. SoulsEnv._lock_on nudges the
+        camera towards the boss and presses lock on once it is roughly in view; run
+        that at full rate until the lock takes or `timeout` seconds pass.
+        """
+        self.game.game_speed = 1.0
+        if not self._game_window.focused:
+            self._game_window.focus()
+        self._lock_on_timer = 0
+        t_cam = time.time()
+        while time.time() - t_cam < timeout:
+            self.game.clear_cache()
+            if self.game.lock_on:
+                return True
+            self._lock_on()
+            self._game_input.update_input()
+            self.game.sleep(0.01)
+            self._game_input.reset()  # Prevent getting stuck if initial press is missed
+            if not self._game_window.focused:
+                self._game_window.focus()
+        self.game.clear_cache()
+        return bool(self.game.lock_on)
+''' % CAMERA_TIMEOUT
+
+
+def _replace_method(text: str, name: str, new_source: str) -> str:
+    """Swap one method of the class for `new_source`, leaving the rest untouched."""
+    if new_source.strip() in text:
+        print(f"[*] iudex.py: {name} already patched")
+        return text
+    pattern = re.compile(rf"    def {name}\(self.*?(?=\n    (?:def |@)|\n\S)", re.S)
+    text, n = pattern.subn(lambda _m: new_source.rstrip("\n"), text, count=1)
+    if n:
+        print(f"[+] iudex.py: {name} replaced (camera turns towards the boss, "
+              f"{CAMERA_TIMEOUT}s cap)")
+    else:
+        print(f"[!] iudex.py: could not find {name} to replace")
+    return text
+
+
 def patch_speedhack():
     """Let the connector run without the speed hack DLL instead of raising."""
     path = VENV / "core/speedhack/speedhack.py"
@@ -105,34 +147,21 @@ def patch_iudex():
     elif original in text:
         print("[*] iudex.py: bonfire reload already present")
 
-    # --- camera timeout ---------------------------------------------------------------
+    # --- camera reset: turn the camera, not the character ----------------------------
     #
-    # _camera_reset loops until lock on is established, and that is not one button press:
-    # SoulsEnv._lock_on walks the camera towards the boss with cameraleft/right/up/down
-    # and only presses lock once the camera is within about 37 degrees, with each press
-    # queued for the following iteration. Converging takes seconds of wall time.
+    # Lock-on is a camera movement followed by a button press: the game only locks a
+    # target that is in view. SoulsGym's own _camera_reset loops _lock_on, which nudges
+    # the camera towards the boss with cameraleft/right/up/down and presses lock once
+    # it is within about 37 degrees, but it loops forever if the lock never takes.
     #
-    # Cutting it short hands back an unlocked camera, and while unlocked SoulsGym
-    # movement is camera-relative with no camera control in the action space - so the
-    # agent runs off in whatever direction the camera was left pointing. The timeout is
-    # only here to stop the loop hanging, so it should be generous.
-    unpatched = "while not self.game.lock_on:"
-    if unpatched in text:
-        text = text.replace(
-            unpatched,
-            "t_cam = time.time()\n        while not self.game.lock_on and "
-            f"(time.time() - t_cam < {CAMERA_TIMEOUT}):",
-            1,
-        )
-        print(f"[+] iudex.py: camera timeout set to {CAMERA_TIMEOUT}s")
-    else:
-        text, bumped = re.subn(
-            r"while not self\.game\.lock_on and \(time\.time\(\) - t_cam < [0-9.]+\)",
-            f"while not self.game.lock_on and (time.time() - t_cam < {CAMERA_TIMEOUT})",
-            text,
-        )
-        if bumped:
-            print(f"[+] iudex.py: camera timeout raised to {CAMERA_TIMEOUT}s")
+    # An earlier patch replaced that with a memory write that rotated the player body
+    # towards the boss and then spammed the lock button. With the wrong heading
+    # convention the body turned to face away, the lock reset the camera behind a
+    # character with its back to Iudex, no target was in view, and after the timeout
+    # the episode began unlocked: the fly then ran camera-relative and died in a few
+    # steps at 100% boss HP. This restores the camera loop with a timeout argument so
+    # it can also be called mid-fight.
+    text = _replace_method(text, "_camera_reset", CAMERA_RESET)
 
     if text != before:
         path.write_text(text, encoding="utf-8")

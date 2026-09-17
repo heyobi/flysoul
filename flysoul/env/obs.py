@@ -24,6 +24,20 @@ import numpy as np
 _IUDEX_ATTACK_ID_MAX = 18
 _IUDEX_STAGGER_IDS = frozenset({30, 31})
 
+# Offset between player_pose[3] and the world bearing convention used here.
+#
+# pose[3] is a yaw - it sweeps with the character, measured at 233 degrees over a
+# circling strafe - but its zero is not the +x axis. Measured against the game with
+# lock-on held, where the character provably faces the boss and the bearing must
+# therefore read zero, `atan2(dy, dx) - pose[3]` came out at -146 degrees with a
+# spread of 20 across 60 samples.
+#
+# Left uncorrected this is not a cosmetic error: the bearing feeds the retinal map,
+# so the pursuit pathway and both strafe pathways were driven by a boss that appeared
+# nearly behind the fly. Re-measure with scripts/fit_heading2.py if the game or the
+# soulsgym pose reader changes.
+PLAYER_HEADING_OFFSET = math.radians(146.0)
+
 
 def _iudex_attack_ids() -> frozenset[int]:
     """Read the attack ID set from the installed soulsgym, falling back to the known range."""
@@ -96,7 +110,10 @@ def parse_obs(obs: Any, info: dict | None = None) -> CombatState:
         st.distance = float(math.hypot(dx, dy))
         world_angle = math.atan2(dy, dx)
         heading = float(p_pose[3]) if p_pose.size > 3 else 0.0
-        st.angle = float((world_angle - heading + math.pi) % (2.0 * math.pi) - math.pi)
+        st.angle = float(
+            (world_angle - heading + PLAYER_HEADING_OFFSET + math.pi) % (2.0 * math.pi)
+            - math.pi
+        )
 
         p_max_hp = max(1.0, _f(obs.get("player_max_hp"), 454.0))
         b_max_hp = max(1.0, _f(obs.get("boss_max_hp"), 1037.0))

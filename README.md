@@ -144,13 +144,15 @@ In *Drosophila*, learning occurs primarily at Kenyon Cell (KC) to Mushroom Body 
   actually executed keeps that compartment eligible for a short window. A single scalar
   reward applied to every plastic synapse can only make the whole mushroom body louder or
   quieter — never prefer one action over another.
-* **Prediction error:** dopamine carries $r - \bar{r}$, not $r$. A hit from Iudex is worth
-  about $-2.8$ and lands three times as often as the $+0.5$ the fly earns for its own, so
-  the raw signal is net negative on every event; that depresses whatever the fly was
-  doing until it does nothing, which is the one behaviour that owns no compartment and so
-  can never be punished.
+* **Prediction error:** dopamine carries $\delta = r + \gamma V(s') - V(s)$, not $r$, with
+  $V$ read linearly off the sparse Kenyon cell population. This is what makes dodging
+  learnable at all: SoulsGym pays for damage dealt and damage taken and for nothing else,
+  so a successful dodge scores exactly zero and is indistinguishable from standing still.
+  Against a mock whose reward matches the game's, the plain signal collapses to zero hits
+  by episode 150 with `parry` the most-reinforced channel; the TD signal improves
+  monotonically over 200 episodes.
 
-$$\Delta W_{ij} = \eta \cdot \tanh\left(\frac{r - \bar{r}}{\sigma}\right) \cdot c_{k(ij)}(t) \cdot \text{Trace}_{ij}(t)$$
+$$\Delta W_{ij} = \eta \cdot \tanh\left(\frac{\delta}{\sigma}\right) \cdot c_{k(ij)}(t) \cdot \text{Trace}_{ij}(t)$$
 
 where $c_k$ is the responsibility of compartment $k$ for what just happened.
 

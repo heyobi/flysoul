@@ -11,6 +11,7 @@ made inside the circuit.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 import numpy as np
@@ -31,7 +32,7 @@ from flysoul.connectome.calibration import _topology_fingerprint, calibrate_or_l
 from flysoul.connectome.engine import ConnectomeEngine
 from flysoul.connectome.graph import build_fly_circuit
 from flysoul.connectome.plasticity import DopaminePlasticity
-from flysoul.env.obs import parse_obs
+from flysoul.env.obs import PLAYER_HEADING_OFFSET, parse_obs
 from flysoul.env.souls_wrapper import (
     BINDING_HELP,
     LiveEnvUnavailable,
@@ -48,6 +49,21 @@ from flysoul.visualizer import (
     set_topology,
     start_visualizer,
 )
+
+
+# Short labels for the episode line. Truncating the channel names collides:
+# attack_light and attack_heavy both cut down to "attac".
+SHORT_CHANNEL = {
+    "advance": "fwd",
+    "retreat": "back",
+    "strafe_left": "strafeL",
+    "strafe_right": "strafeR",
+    "roll": "roll",
+    "attack_light": "atkL",
+    "attack_heavy": "atkH",
+    "parry": "parry",
+    "idle": "idle",
+}
 
 
 def parse_args():
@@ -74,6 +90,22 @@ def parse_args():
                         help="Ignore the cached calibration and re-run it from scratch.")
     parser.add_argument("--no-learning", action="store_true",
                         help="Freeze the KC->MBON synapses (evaluate the innate circuit only).")
+    parser.add_argument("--aggression", type=float, default=1.0,
+                        help="Extra weight on damage dealt when forming the dopamine signal. "
+                             "SoulsGym values a hit taken about 8x a hit landed, so the "
+                             "default of 1.0 teaches avoidance rather than winning.")
+    parser.add_argument("--proximity-drive", type=float, default=0.0,
+                        help="Cost per metre beyond --engage-range, applied to the "
+                             "learning signal. Unlike a flat per-step cost this grows "
+                             "as the fly backs off, so it is visible inside the "
+                             "discount horizon rather than only in the episode total.")
+    parser.add_argument("--engage-range", type=float, default=4.0,
+                        help="Distance in metres beyond which --proximity-drive applies.")
+    parser.add_argument("--impatience", type=float, default=0.0,
+                        help="Per-step cost applied to the learning signal while the boss "
+                             "is undamaged. Disengaging scores exactly zero in SoulsGym, "
+                             "which beats any exchange that costs health, so without this "
+                             "a well-optimised agent learns to run away and never fight.")
     parser.add_argument("--no-memory", action="store_true",
                         help="Do not load or save learned synapses; start from the innate circuit.")
     parser.add_argument("--skip-input-check", action="store_true",
@@ -208,11 +240,11 @@ def main():
             "  python -c 'import soulsgym'\n"
             "[yellow]Pass --allow-mock-fallback if you really want the simulator.[/yellow]"
         )
-        return
+        return 2
     mock_mode = is_mock(env)
     if args.game and mock_mode:
         console.print("[bold red]Refusing to report simulator results as live play.[/bold red]")
-        return
+        return 2
 
     if not mock_mode and not args.skip_input_check:
         console.print("Checking that the game responds to the attack key ...")
@@ -222,7 +254,7 @@ def main():
             console.print("[bold red]The attack key does nothing in game.[/bold red]")
             console.print(BINDING_HELP)
             env.close()
-            return
+            return 2
     dashboard = FlySoulDashboard(console)
 
     victories = 0
@@ -239,6 +271,8 @@ def main():
             obs, info, env = reset_episode(env, console, use_mock)
             if not use_mock and not ensure_lock_on(env, console):
                 console.print("[yellow]Starting the episode without lock-on.[/yellow]")
+            if not use_mock:
+                report_camera_alignment(env, console, ep)
             engine.reset_state()
             encoder.reset()
             plasticity.reset()
@@ -286,8 +320,8 @@ def main():
             else:
                 total = max(1, sum(summary["actions"].values()))
                 mix = " ".join(
-                    f"{k[:5]}:{100 * v // total}%"
-                    for k, v in sorted(summary["actions"].items(), key=lambda kv: -kv[1])[:4]
+                    f"{SHORT_CHANNEL.get(k, k[:5])}:{100 * v // total}%"
+                    for k, v in sorted(summary["actions"].items(), key=lambda kv: -kv[1])[:5]
                 )
                 console.print(
                     f"[bold red]EPISODE #{ep} YOU DIED.[/bold red] "
@@ -313,8 +347,8 @@ def main():
     )
 
 
-def ensure_lock_on(env, console, seconds: float = 10.0):
-    """Do not let the fly move until the camera is locked on to Iudex.
+def ensure_lock_on(env, console, seconds: float = 12.0, quiet: bool = False):
+    """Turn the camera onto Iudex and lock on; do not let the fly move until it holds.
 
     SoulsGym's movement actions are frame-relative: **with** lock-on, action 0 walks
     towards the boss and attacks track it; **without** it, action 0 walks wherever the
@@ -322,11 +356,12 @@ def ensure_lock_on(env, console, seconds: float = 10.0):
     unlocked fly cannot steer - it can only sprint off in whatever direction the camera
     was left in, which is exactly what it looks like from the outside.
 
-    Establishing the lock takes several steps by design: SoulsEnv._lock_on first nudges
-    the camera towards the boss with cameraleft/right/up/down and only presses the lock
-    button once the camera is within about 37 degrees, and those presses are queued for
-    the following step. A short timeout around that loop gives up mid-way and hands back
-    an unlocked camera.
+    Establishing the lock is a camera movement, not a button press: SoulsEnv._lock_on
+    nudges the camera towards the boss with cameraleft/right/up/down and only presses
+    the lock button once the camera is within about 37 degrees. The patched
+    _camera_reset runs that at full rate until the lock holds or `seconds` pass. It is
+    used at the start of every episode and again mid-fight when the lock is lost, so
+    `quiet` keeps the mid-fight case to one short line.
 
     Returns True if the camera is locked on when this returns.
     """
@@ -338,16 +373,21 @@ def ensure_lock_on(env, console, seconds: float = 10.0):
     camera_reset = getattr(unwrapped, "_camera_reset", None)
     deadline = time.time() + seconds
     attempts = 0
+    started = time.time()
     while time.time() < deadline:
         try:
+            game.clear_cache()
             if bool(game.lock_on):
-                return True
+                break
         except Exception:
             return True  # Cannot read the flag; let the episode proceed.
         attempts += 1
         if camera_reset is not None:
             try:
-                camera_reset()
+                try:
+                    camera_reset(timeout=max(0.5, deadline - time.time()))
+                except TypeError:
+                    camera_reset()  # unpatched soulsgym: no timeout argument
                 continue
             except Exception:
                 camera_reset = None
@@ -355,23 +395,91 @@ def ensure_lock_on(env, console, seconds: float = 10.0):
         try:
             _, _, terminated, truncated, _ = env.step(SOULSGYM_IDLE)
             if terminated or truncated:
-                return bool(game.lock_on)
+                break
         except Exception:
             break
 
     locked = False
     try:
+        game.clear_cache()
         locked = bool(game.lock_on)
     except Exception:
         pass
+    # _camera_reset leaves the game running at full speed; the environment expects it
+    # paused between steps.
+    if attempts:
+        try:
+            game.pause()
+        except Exception:
+            pass
+    took = time.time() - started
+    if locked and attempts and not quiet:
+        console.print(f"[dim]lock-on established after {took:.1f}s of camera turning[/dim]")
     if not locked:
-        console.print(
-            f"[bold yellow]WARNING could not establish lock-on after {attempts} attempts "
-            f"({seconds:.0f}s).[/bold yellow] The fly will hold position rather than run "
-            "camera-relative. If this keeps happening, raise the camera timeout patched "
-            "into soulsgym's _camera_reset."
-        )
+        if quiet:
+            console.print(f"[yellow]lock-on not recovered in {took:.1f}s[/yellow]")
+        else:
+            console.print(
+                f"[bold yellow]WARNING could not establish lock-on in {took:.0f}s.[/bold yellow] "
+                "The camera was turned towards Iudex and lock pressed repeatedly and it "
+                "did not take. The fly will hold position rather than run camera-relative."
+            )
     return locked
+
+
+def report_camera_alignment(env, console, episode: int):
+    """Log how well the camera is pointing at Iudex as the fight starts.
+
+    An episode that opens with the camera facing away is unwinnable until it turns:
+    movement is measured against the boss but applied against the camera. This makes the
+    condition visible in the log instead of only on screen.
+    """
+    game = getattr(env.unwrapped, "game", None)
+    if game is None:
+        return
+    def sample():
+        game.clear_cache()
+        target = game.iudex_pose[:3] - game.player_pose[:3]
+        norm = float(np.linalg.norm(target))
+        if norm < 1e-6:
+            return None, False
+        return float(np.dot(game.camera_pose[3:], target / norm)), bool(game.lock_on)
+
+    try:
+        first, locked = sample()
+        if first is None:
+            return
+        if locked and first > 0.8:
+            return  # The normal case; do not clutter the log.
+        # A lock-on camera glides onto its target rather than snapping, so a bad reading
+        # taken the instant the lock is established may just be the swing in progress.
+        # Sample again before calling it a problem.
+        time.sleep(1.0)
+        second, locked_after = sample()
+    except Exception:
+        return
+    settled = "settled" if (second is not None and second > 0.8) else "STILL OFF"
+    # The camera is not the body. With lock-on the character faces the target regardless
+    # of where the camera points, and the complaint being chased here is about the
+    # character's back, so measure the heading too.
+    try:
+        game.clear_cache()
+        p = game.player_pose
+        b = game.iudex_pose
+        bearing = math.atan2(float(b[1] - p[1]), float(b[0] - p[0]))
+        # Same convention as parse_obs: without the measured offset this read "back to
+        # boss" for a character that was locked on and facing it.
+        heading = float(p[3]) + PLAYER_HEADING_OFFSET
+        heading_err = abs((bearing - heading + math.pi) % (2 * math.pi) - math.pi)
+    except Exception:
+        heading_err = float("nan")
+    facing = "BACK TO BOSS" if heading_err > math.pi / 2 else "facing boss"
+    console.print(
+        f"[yellow]Episode #{episode} starts poorly aimed:[/yellow] "
+        f"camera {first:+.2f} -> {second:+.2f} after 1s ({settled}), "
+        f"body {math.degrees(heading_err):.0f} deg off ({facing}), "
+        f"lock_on={locked}->{locked_after}"
+    )
 
 
 def settle_connectome(engine, encoder, obs, info, seconds: float = 2.0):
@@ -416,8 +524,10 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
     hits = 0
     step = 0
     episode_actions: dict[str, int] = {}
+    opening_trace: list[str] | None = [] if not mock_mode else None
     unlocked_steps = 0
     lock_warned = False
+    relocks = 0
     step_ms = float(
         getattr(env.unwrapped, "step_seconds", None)
         or getattr(env.unwrapped, "step_size", 0.1)
@@ -447,7 +557,7 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
             # 3. Read out the winning descending pool, restricted to what the body can
             #    currently execute.
             valid_channels = decoder.channels_for_valid_actions(
-                state.valid_actions, mock=mock_mode
+                state.valid_actions, mock=mock_mode, lock_on=mock_mode or state.lock_on
             )
             channel, motor_rates = decoder.decode(
                 spike_counts, explore=args.explore, valid_channels=valid_channels
@@ -458,21 +568,64 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                 channel, motor_rates, mock=mock_mode, lock_on=state.lock_on
             )
             prev_boss_hp = state.boss_hp
+            prev_distance = state.distance
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
             state = parse_obs(obs, info)
-            if state.boss_hp < prev_boss_hp - 1e-6:
+            boss_damage = max(0.0, prev_boss_hp - state.boss_hp)
+            if boss_damage > 1e-6:
                 hits += 1
+
+            # The signal the fly learns from is not always the signal the environment
+            # reports. SoulsGym scores a landed hit at about +0.05 and a hit taken at
+            # about -0.44, so a policy that never engages scores better than one that
+            # trades evenly - and the agent duly learns to hold its guard and back off.
+            # Scaling the damage-dealt term puts offence and defence on comparable
+            # footing. It changes what the fly wants, not what it is allowed to do, and
+            # the episode metric stays the environment's own boss HP.
+            learning_reward = reward + boss_damage * (args.aggression - 1.0)
+            # Drive to engage. This is a motivational state, not a rule about which
+            # action to take: it says the fly minds time passing without progress,
+            # and leaves what to do about that entirely to the circuit. It is needed
+            # because fleeing scores exactly zero and zero beats every exchange that
+            # costs health, so the better the agent optimises, the more reliably it
+            # finds running away.
+            if args.impatience and boss_damage <= 1e-6:
+                learning_reward -= args.impatience
+            if args.proximity_drive:
+                # Backing out of the fight costs more the further out it goes. A flat
+                # per-step cost does not work here: discounted at gamma=0.95 the fly
+                # only sees about twenty steps ahead, so the total cost of a long
+                # retreat never enters the comparison against an immediate hit.
+                learning_reward -= args.proximity_drive * max(
+                    0.0, state.distance - args.engage_range
+                )
 
             # 5. Dopaminergic plasticity. The efference copy of the executed action is
             #    what makes the credit land in the right mushroom body compartment.
             encoder.set_efference(channel)
             plasticity.update_traces(spike_counts, executed_channel=channel)
             if not args.no_learning:
-                plasticity.apply_reinforcement(reward)
+                # Hand the critic the current state so dopamine can carry a
+                # temporal-difference error. Without it, surviving an attack is
+                # worth exactly zero and the fly cannot learn to dodge at all.
+                plasticity.apply_reinforcement(
+                    learning_reward, spike_counts, terminal=bool(terminated or truncated)
+                )
 
             global_action_counts[channel] = global_action_counts.get(channel, 0) + 1
             episode_actions[channel] = episode_actions.get(channel, 0) + 1
+
+            # Opening trace. "Facing the wrong way" is only a problem if the fly then
+            # moves the wrong way, and that is what this records: what it chose, and
+            # whether the distance to Iudex actually fell. Camera alignment on its own
+            # says nothing once lock-on is established, because movement is measured
+            # against the boss from then on.
+            if opening_trace is not None and step <= 8:
+                opening_trace.append(f"{channel[:5]}{state.distance - prev_distance:+.1f}")
+                if step == 8:
+                    console.print(f"  opening #{ep}: " + " ".join(opening_trace))
+                    opening_trace = None
             active_count = int(np.count_nonzero(spike_counts))
 
             # Every locomotor mapping assumes the camera is locked on: with lock-on,
@@ -482,14 +635,21 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
             # short gap is normal and a persistent one is not.
             if not mock_mode:
                 unlocked_steps = 0 if state.lock_on else unlocked_steps + 1
-                if unlocked_steps >= 8 and not lock_warned:
-                    lock_warned = True
-                    console.print(
-                        "[bold yellow]WARNING lock-on has been lost for "
-                        f"{unlocked_steps} steps.[/bold yellow] Movement is camera-relative "
-                        "while unlocked, so the fly cannot steer towards Iudex. Check the "
-                        "camera timeout patched into soulsgym's _camera_reset."
-                    )
+                if unlocked_steps >= 3:
+                    # Lost mid-fight: a grab, a roll behind the boss, a missed press.
+                    # SoulsGym nudges the camera once per step on its own, which at one
+                    # mouse tick per 100 ms takes many seconds to bring Iudex back into
+                    # view while the fly runs camera-relative. Turn it now, at full rate.
+                    if ensure_lock_on(env, console, seconds=3.0, quiet=True):
+                        relocks += 1
+                        unlocked_steps = 0
+                    elif not lock_warned:
+                        lock_warned = True
+                        console.print(
+                            "[bold yellow]WARNING lock-on lost and not recovered.[/bold yellow] "
+                            "Movement is camera-relative while unlocked, so the fly cannot "
+                            "steer towards Iudex."
+                        )
 
             if enable_web:
                 if step % 3 == 0 and not mock_mode:
@@ -503,10 +663,19 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                     "boss_attacking": state.boss_attacking, "action_name": channel,
                     "lock_on": state.lock_on,
                     "dopamine": float(plasticity.dopamine_level),
+                    "td_error": round(float(plasticity.last_td_error), 3),
+                    "state_value": round(float(plasticity.last_value), 3),
                     "active_neurons": active_count, "cumulative_reward": ep_reward,
                     "spikes": np.flatnonzero(spike_counts).tolist(),
                     "mean_weight": round(float(plasticity.mean_plastic_weight), 4),
                     "channel_weights": plasticity.channel_weights(),
+                    "motor_rates": {k: round(v, 1) for k, v in motor_rates.items()},
+                    # Which pools the body could actually execute this step. Without
+                    # it the readout looks wrong whenever the strongest pool was
+                    # masked out because the player was locked in an animation.
+                    "valid_channels": (
+                        sorted(valid_channels) if valid_channels is not None else None
+                    ),
                     "total_ltp": plasticity.total_ltp_events,
                     "total_ltd": plasticity.total_ltd_events,
                     "action_counts": global_action_counts,
@@ -543,4 +712,4 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)

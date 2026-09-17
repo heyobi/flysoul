@@ -133,6 +133,38 @@
     .act-segment { height: 100%; transition: width 0.3s; }
     .act-legend { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px; }
 
+    /* Descending competition */
+    .dn-container { margin-top: 10px; }
+    .dn-head { display: flex; justify-content: space-between; align-items: baseline;
+               font-size: 10px; color: var(--text-muted); margin-bottom: 5px;
+               text-transform: uppercase; letter-spacing: 0.06em; }
+    .dn-head-cols i { display: inline-block; width: 34px; text-align: right; font-style: normal; }
+    .dn-row { display: flex; align-items: center; gap: 6px; padding: 1.5px 0; font-size: 10.5px; }
+    .dn-name { width: 76px; flex: none; color: var(--text-muted); text-transform: capitalize;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dn-track { flex: 1; height: 7px; border-radius: 4px; background: rgba(255,255,255,0.06);
+                overflow: hidden; }
+    .dn-fill { display: block; height: 100%; width: 0%; border-radius: 4px;
+               transition: width 0.12s linear; opacity: 0.75; }
+    .dn-row i { display: inline-block; width: 34px; text-align: right; font-style: normal;
+                color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    .dn-row.dn-winner .dn-name { color: #fff; font-weight: 700; }
+    .dn-row.dn-winner .dn-fill { opacity: 1; box-shadow: 0 0 8px currentColor; }
+    .dn-row.dn-winner .dn-hz { color: #fff; font-weight: 700; }
+    .dn-row.dn-blocked { opacity: 0.32; }
+    .dn-row.dn-blocked .dn-name::after { content: ' (locked)'; font-size: 8.5px; }
+    .dn-foot { font-size: 9.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+    #anatomy-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10px;
+                      color: var(--text-muted); margin-top: 6px; }
+    .leg-item { white-space: nowrap; }
+    .leg-item b { color: #cbd5e1; font-weight: 600; }
+    #circuit-summary { font-size: 9.5px; color: var(--text-muted); margin-top: 6px;
+                       line-height: 1.5; }
+    .lock-badge { font-size: 9px; padding: 1px 6px; border-radius: 4px; font-weight: 700;
+                  letter-spacing: 0.05em; }
+    .lock-ok { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .lock-bad { background: rgba(244,63,94,0.18); color: #fb7185; }
+
     /* Mobile Navigation Bar */
     #mobile-nav-bar {
       display: none;
@@ -340,7 +372,7 @@
       </div>
     </div>
     <div class="subtitle">
-      Drosophila Melanogaster CNS (166k / 1.9k calibrated neurons) × SoulsGym Dark Souls III. 3-factor STDP dopamine reinforcement learning.
+      Drosophila Melanogaster CNS (MaleCNS v1.0) × SoulsGym Dark Souls III. Sign-constrained LIF circuit, <span id="header-neurons">--</span> calibrated neurons, 3-factor dopamine STDP.
     </div>
     <div class="cam-controls">
       <button class="cam-btn active" id="btn-front" onclick="setCameraView('front')">🔬 Frontal</button>
@@ -372,7 +404,13 @@
     </div>
     <div class="boss-name">
       <span>Iudex Gundyr</span>
-      <span class="boss-status-badge boss-status-idle" id="boss-alert-badge">IDLE</span>
+      <span>
+        <!-- Without lock-on, movement is camera-relative and the fly cannot steer at
+             all, so this is worth seeing at a glance rather than inferring from the
+             video feed. -->
+        <span class="lock-badge lock-ok" id="lock-badge" title="Camera lock-on">LOCK</span>
+        <span class="boss-status-badge boss-status-idle" id="boss-alert-badge">IDLE</span>
+      </span>
     </div>
 
     <!-- Boss HP Bar -->
@@ -432,14 +470,10 @@
       <span>MaleCNS Anatomical Neuropils</span>
       <span id="active-neurons-val" style="color: var(--cyan); font-weight: 700;">0 Spikes</span>
     </div>
-    <div class="neuropil-list">
-      <div class="neuropil-item"><span class="dot" style="background: var(--cyan);"></span> Optic Lobes (Retina/Medulla)</div>
-      <div class="neuropil-item"><span class="dot" style="background: var(--violet);"></span> Central Complex (EB / FB)</div>
-      <div class="neuropil-item"><span class="dot" style="background: var(--gold);"></span> Mushroom Body (Kenyon Cells)</div>
-      <div class="neuropil-item"><span class="dot" style="background: var(--crimson);"></span> Dopamine (PPL1 / PAM)</div>
-      <div class="neuropil-item"><span class="dot" style="background: var(--lime);"></span> Motor DNs (VNC T1-T3)</div>
-      <div class="neuropil-item"><span class="dot" style="background: #94a3b8;"></span> MBON Readout Circuit</div>
-    </div>
+    <!-- Populated from the circuit the server actually built, so it cannot drift out
+         of date when the wiring changes. Cold colours are the inhibitory populations. -->
+    <div id="anatomy-legend"></div>
+    <div id="circuit-summary"></div>
 
     <!-- Three-Factor STDP Plasticity Tracker -->
     <div class="plasticity-box">
@@ -458,6 +492,17 @@
         <span>LTD Events: <b id="ltd-count" style="color: var(--crimson);">0</b></span>
         <span>LTP Events: <b id="ltp-count" style="color: var(--lime);">0</b></span>
         <span>DA Burst: <b id="dopamine-val" style="color: var(--gold);">0.00x</b></span>
+      </div>
+      <!-- Dopamine carries r + gamma*V(s') - V(s), not the raw reward. V is what makes a
+           dodge learnable: SoulsGym pays nothing for surviving an attack, so without a
+           value estimate that outcome is indistinguishable from standing still. -->
+      <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 5px;">
+        <span title="Value the mushroom body assigns to the situation right now">
+          V(state): <b id="state-value" style="color: var(--cyan);">0.00</b>
+        </span>
+        <span title="Temporal-difference error: better (+) or worse (-) than expected">
+          TD error: <b id="td-error" style="color: var(--gold);">0.00</b>
+        </span>
       </div>
     </div>
   </div>
@@ -493,21 +538,16 @@
       </div>
     </div>
 
-    <!-- Action Breakdown -->
-    <div class="action-bar-container">
-      <div class="action-bar-track" id="action-bar-track">
-        <div class="act-segment" id="seg-roll" style="width: 20%; background: var(--cyan);" title="Dodge Roll"></div>
-        <div class="act-segment" id="seg-attack" style="width: 20%; background: var(--gold);" title="Attack"></div>
-        <div class="act-segment" id="seg-parry" style="width: 15%; background: var(--violet);" title="Parry/Block"></div>
-        <div class="act-segment" id="seg-move" style="width: 15%; background: var(--lime);" title="Movement"></div>
-        <div class="act-segment" id="seg-idle" style="width: 30%; background: #334155;" title="Idle"></div>
+    <!-- Descending competition: one row per action channel -->
+    <div class="dn-container">
+      <div class="dn-head">
+        <span>Descending pools &mdash; premotor winner-take-all</span>
+        <span class="dn-head-cols"><i>Hz</i><i>MB w</i><i>used</i></span>
       </div>
-      <div class="act-legend">
-        <span><span class="dot" style="background: var(--cyan); width: 6px; height: 6px;"></span> Roll: <b id="pct-roll">0%</b></span>
-        <span><span class="dot" style="background: var(--gold); width: 6px; height: 6px;"></span> Attack: <b id="pct-attack">0%</b></span>
-        <span><span class="dot" style="background: var(--violet); width: 6px; height: 6px;"></span> Parry: <b id="pct-parry">0%</b></span>
-        <span><span class="dot" style="background: var(--lime); width: 6px; height: 6px;"></span> Move: <b id="pct-move">0%</b></span>
-        <span><span class="dot" style="background: #334155; width: 6px; height: 6px;"></span> Idle: <b id="pct-idle">0%</b></span>
+      <div id="dn-rows"></div>
+      <div class="dn-foot">
+        Bar = live firing rate. <b>MB w</b> = learned mushroom body weight for that
+        channel; it starts equal everywhere and only experience separates it.
       </div>
     </div>
   </div>
@@ -693,8 +733,23 @@
           'Dopamine_PPL1':    [0.96, 0.25, 0.37],    // Crimson
           'Dopamine_PAM':     [1.0, 0.40, 0.20],     // Coral
           'Nociceptor':       [0.99, 0.10, 0.10],    // Deep Red
+          'Proprioceptor':    [1.0, 0.54, 0.87],     // Pink
           'Motor_':           [0.13, 0.77, 0.37],    // Acid Green
+          // Every GABA/glutamatergic population is drawn cold. The circuit is
+          // sign-constrained, and without inhibition the descending pools cannot
+          // compete at all - so where the inhibition sits is worth seeing.
+          'Compass_Ring_Inhibitory':   [0.17, 0.42, 1.0],
+          'Central_Complex_Inhibitory':[0.30, 0.55, 1.0],
+          'APL_Inhibitory':            [0.10, 0.65, 1.0],
+          'Premotor_Inhibitory_':      [0.20, 0.50, 0.95],
+          'Vigor_Gate_Inhibitory':     [0.45, 0.60, 1.0],
+          'Approach_Brake_Inhibitory': [0.05, 0.45, 0.90],
         };
+
+        actionChannels = data.action_channels || actionChannels;
+        neuronIsInhibitory = data.inhibitory || [];
+        buildDescendingRows();
+        renderAnatomyLegend(data, palette);
 
         for (let i = 0; i < numNeurons; i++) {
           const pt = data.coords[i];
@@ -702,10 +757,13 @@
 
           const label = data.labels[i] || '';
           let c = [0.0, 0.94, 1.0];
+          let best = -1;
+          // Longest-prefix match: 'Central_Complex_Inhibitory' must not be captured by
+          // the 'Central_Complex' entry.
           for (let key in palette) {
-            if (label.startsWith(key)) {
+            if (label.startsWith(key) && key.length > best) {
               c = palette[key];
-              break;
+              best = key.length;
             }
           }
           colors.push(c[0], c[1], c[2]);
@@ -874,6 +932,133 @@
     // -------------------------------------------------------------
     // 6. Real-Time Telemetry via Server-Sent Events (SSE)
     // -------------------------------------------------------------
+    // ---- Descending competition panel ------------------------------------------
+    let actionChannels = [];
+    let neuronIsInhibitory = [];
+    let baselineChannelWeight = null;
+
+    const CHANNEL_COLOURS = {
+      advance: 'var(--lime)',
+      strafe_left: '#38bdf8',
+      strafe_right: '#38bdf8',
+      retreat: '#94a3b8',
+      roll: 'var(--cyan)',
+      attack_light: 'var(--gold)',
+      attack_heavy: '#f97316',
+      parry: 'var(--violet)',
+    };
+
+    function buildDescendingRows() {
+      const host = document.getElementById('dn-rows');
+      if (!host || !actionChannels.length) return;
+      host.innerHTML = '';
+      for (const ch of actionChannels) {
+        const row = document.createElement('div');
+        row.className = 'dn-row';
+        row.id = `dn-row-${ch}`;
+        row.innerHTML =
+          `<span class="dn-name">${ch.replace(/_/g, ' ')}</span>` +
+          `<span class="dn-track"><span class="dn-fill" id="dn-fill-${ch}" ` +
+          `style="background:${CHANNEL_COLOURS[ch] || 'var(--cyan)'}"></span></span>` +
+          `<i class="dn-hz" id="dn-hz-${ch}">0</i>` +
+          `<i class="dn-w" id="dn-w-${ch}">--</i>` +
+          `<i class="dn-share" id="dn-share-${ch}">0%</i>`;
+        host.appendChild(row);
+      }
+    }
+
+    function updateDescendingPools(data) {
+      if (!actionChannels.length) return;
+
+      if (data.motor_rates) {
+        // A channel the game cannot execute right now is excluded from the readout, so
+        // the loudest pool is not always the winner. Dim those rows rather than leaving
+        // the panel looking like it picked the wrong one.
+        const mask = data.valid_channels === null || data.valid_channels === undefined
+          ? null : new Set(data.valid_channels);
+        let peak = 1;
+        for (const ch of actionChannels) peak = Math.max(peak, data.motor_rates[ch] || 0);
+        for (const ch of actionChannels) {
+          const hz = data.motor_rates[ch] || 0;
+          const fill = document.getElementById(`dn-fill-${ch}`);
+          const label = document.getElementById(`dn-hz-${ch}`);
+          if (fill) fill.style.width = `${Math.round((hz / peak) * 100)}%`;
+          if (label) label.innerText = Math.round(hz);
+          const row = document.getElementById(`dn-row-${ch}`);
+          if (row) {
+            row.classList.toggle('dn-winner', ch === data.action_name);
+            const blocked = mask !== null && !mask.has(ch);
+            row.classList.toggle('dn-blocked', blocked);
+            row.title = blocked ? 'Body cannot execute this right now' : '';
+          }
+        }
+      }
+
+      if (data.channel_weights) {
+        // Show the learned weight as a change from where every compartment started,
+        // because the absolute number means nothing on its own.
+        if (!baselineChannelWeight) {
+          const vals = actionChannels.map(c => data.channel_weights[c] || 0);
+          const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
+          if (mean > 0) baselineChannelWeight = mean;
+        }
+        for (const ch of actionChannels) {
+          const el = document.getElementById(`dn-w-${ch}`);
+          if (!el || !baselineChannelWeight) continue;
+          const delta = ((data.channel_weights[ch] || 0) / baselineChannelWeight - 1) * 100;
+          el.innerText = `${delta >= 0 ? '+' : ''}${delta.toFixed(0)}%`;
+          el.style.color = delta > 2 ? 'var(--lime)' : (delta < -2 ? 'var(--crimson)' : 'var(--text-muted)');
+        }
+      }
+
+      if (data.action_counts) {
+        const total = Object.values(data.action_counts).reduce((a, b) => a + b, 0) || 1;
+        for (const ch of actionChannels) {
+          const el = document.getElementById(`dn-share-${ch}`);
+          if (el) el.innerText = `${Math.round(((data.action_counts[ch] || 0) / total) * 100)}%`;
+        }
+      }
+    }
+
+    function renderAnatomyLegend(data, palette) {
+      const host = document.getElementById('anatomy-legend');
+      if (!host) return;
+      const rgb = (c) => `rgb(${Math.round(c[0]*255)},${Math.round(c[1]*255)},${Math.round(c[2]*255)})`;
+      const pops = data.populations || {};
+      // Group the per-neuron labels into the families worth naming.
+      const groups = {};
+      for (const [label, count] of Object.entries(pops)) {
+        let key = label;
+        if (label.startsWith('Motor_')) key = 'Descending neurons';
+        else if (label.startsWith('Premotor_Inhibitory_')) key = 'Premotor inhibition';
+        else if (label.startsWith('MBON_')) key = 'MBON compartments';
+        groups[key] = (groups[key] || 0) + count;
+      }
+      const colourFor = (name) => {
+        for (const key in palette) if (name.startsWith(key)) return rgb(palette[key]);
+        if (name === 'Descending neurons') return rgb(palette['Motor_']);
+        if (name === 'Premotor inhibition') return rgb(palette['Premotor_Inhibitory_']);
+        if (name === 'MBON compartments') return rgb(palette['MBON']);
+        return 'var(--cyan)';
+      };
+      host.innerHTML = Object.entries(groups)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, count]) =>
+          `<span class="leg-item"><span class="dot" style="background:${colourFor(name)};` +
+          `width:6px;height:6px"></span>${name.replace(/_/g, ' ')} <b>${count}</b></span>`)
+        .join('');
+      const hdr = document.getElementById('header-neurons');
+      if (hdr) hdr.innerText = (data.num_neurons || 0).toLocaleString();
+      const summary = document.getElementById('circuit-summary');
+      if (summary) {
+        summary.innerText =
+          `${(data.num_neurons || 0).toLocaleString()} neurons · ` +
+          `${(data.num_synapses || 0).toLocaleString()} synapses · ` +
+          `${(data.num_inhibitory || 0).toLocaleString()} inhibitory cells · ` +
+          `${(data.num_plastic || 0).toLocaleString()} plastic KC→MBON`;
+      }
+    }
+
     const evtSource = new EventSource('/api/stream');
 
     evtSource.onmessage = (e) => {
@@ -969,6 +1154,23 @@
       if (data.mean_weight !== undefined) {
         document.getElementById('mean-w-val').innerText = `W_avg: ${data.mean_weight.toFixed(2)}`;
       }
+      if (data.state_value !== undefined) {
+        const el = document.getElementById('state-value');
+        if (el) {
+          el.innerText = data.state_value.toFixed(2);
+          // Negative value means the circuit expects this situation to cost it.
+          el.style.color = data.state_value < -0.01 ? 'var(--crimson)'
+                         : (data.state_value > 0.01 ? 'var(--lime)' : 'var(--cyan)');
+        }
+      }
+      if (data.td_error !== undefined) {
+        const el = document.getElementById('td-error');
+        if (el) {
+          el.innerText = `${data.td_error >= 0 ? '+' : ''}${data.td_error.toFixed(2)}`;
+          el.style.color = data.td_error > 0.01 ? 'var(--lime)'
+                         : (data.td_error < -0.01 ? 'var(--crimson)' : 'var(--text-muted)');
+        }
+      }
       if (data.total_ltp !== undefined) {
         document.getElementById('ltp-count').innerText = data.total_ltp;
       }
@@ -976,33 +1178,21 @@
         document.getElementById('ltd-count').innerText = data.total_ltd;
       }
 
-      // Action Distribution Breakdown
-      if (data.action_counts) {
-        const counts = data.action_counts;
-        const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
-        const rollC = (counts['dodge_roll'] || 0);
-        const atkC = (counts['attack_light'] || 0) + (counts['attack_heavy'] || 0);
-        const parryC = (counts['block_parry'] || 0);
-        const moveC = (counts['turn_left'] || 0) + (counts['turn_right'] || 0) + (counts['step_back'] || 0);
-        const idleC = (counts['idle'] || 0);
+      // Descending competition. The rows are built from the channel list the server
+      // sends, so renaming or adding an action channel cannot leave this panel quietly
+      // reporting a channel that no longer exists.
+      updateDescendingPools(data);
 
-        const rPct = Math.round((rollC / total) * 100);
-        const aPct = Math.round((atkC / total) * 100);
-        const pPct = Math.round((parryC / total) * 100);
-        const mPct = Math.round((moveC / total) * 100);
-        const iPct = Math.max(0, 100 - (rPct + aPct + pPct + mPct));
-
-        document.getElementById('pct-roll').innerText = `${rPct}%`;
-        document.getElementById('pct-attack').innerText = `${aPct}%`;
-        document.getElementById('pct-parry').innerText = `${pPct}%`;
-        document.getElementById('pct-move').innerText = `${mPct}%`;
-        document.getElementById('pct-idle').innerText = `${iPct}%`;
-
-        document.getElementById('seg-roll').style.width = `${rPct}%`;
-        document.getElementById('seg-attack').style.width = `${aPct}%`;
-        document.getElementById('seg-parry').style.width = `${pPct}%`;
-        document.getElementById('seg-move').style.width = `${mPct}%`;
-        document.getElementById('seg-idle').style.width = `${iPct}%`;
+      if (data.lock_on !== undefined) {
+        const badge = document.getElementById('lock-badge');
+        if (badge) {
+          const locked = !!data.lock_on;
+          badge.className = `lock-badge ${locked ? 'lock-ok' : 'lock-bad'}`;
+          badge.innerText = locked ? 'LOCK' : 'NO LOCK';
+          badge.title = locked
+            ? 'Camera locked on: movement is measured against the boss.'
+            : 'No lock-on: movement would be camera-relative, so the fly holds position.';
+        }
       }
 
       // Flash Spiking Neurons in 3D (Action Potentials)

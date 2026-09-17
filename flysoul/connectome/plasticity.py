@@ -35,8 +35,10 @@ class DopaminePlasticity:
         credit_decay: float = 0.82,
         scaling_deadband: float = 0.35,
         scaling_rate: float = 0.02,
-        rpe_scale: float = 1.5,
+        rpe_scale: float = 0.0,
         rpe_baseline_rate: float = 0.02,
+        discount: float = 0.95,
+        critic_lr: float = 0.05,
     ):
         self.topology = topology
         self.lr = learning_rate
@@ -44,8 +46,24 @@ class DopaminePlasticity:
         self.credit_decay = credit_decay
         self.scaling_deadband = scaling_deadband
         self.scaling_rate = scaling_rate
+        # Dopamine saturation point. Fixed at a constant it encodes an assumption about
+        # how big rewards are, and the two environments differ by an order of magnitude:
+        # a value tuned on the mock delivers a three times weaker signal in the game for
+        # no reason other than the constant. Zero means track it from experience.
         self.rpe_scale = rpe_scale
+        self._adaptive_scale = rpe_scale <= 0.0
+        self._delta_magnitude = 0.1  # running mean of |delta|, seeded small
         self.rpe_baseline_rate = rpe_baseline_rate
+        self.discount = discount
+        self.critic_lr = critic_lr
+        # Value of the current situation, read out linearly from the Kenyon cell
+        # population. Starts at zero everywhere, so before it has learned anything
+        # the prediction error is just the reward and behaviour is unchanged.
+        self.value_weights = np.zeros(len(topology.kenyon_indices), dtype=np.float32)
+        self._prev_features: np.ndarray | None = None
+        self._prev_value = 0.0
+        self.last_td_error = 0.0
+        self.last_value = 0.0
         # Running expectation of what a reinforcing event is worth in this fight.
         self.reward_baseline = 0.0
 
@@ -106,28 +124,83 @@ class DopaminePlasticity:
 
     # ----------------------------------------------------------- reinforcement
 
-    def apply_reinforcement(self, reward: float):
+    def _features(self, spike_counts: np.ndarray) -> np.ndarray:
+        """Sparse Kenyon cell activity, the substrate the value readout is built on.
+
+        Scaled to unit L2 norm, which is what makes the critic's step size mean what the
+        learning rate says it means. Dividing by the sum instead - so the features add to
+        one - looks equally reasonable and is not: it shrinks every update by the number
+        of active cells. With about a hundred Kenyon cells firing, that left the value
+        estimate two orders of magnitude below the rewards it was supposed to predict
+        (|V| ~ 0.004 against a hit worth -0.44), so the prediction error collapsed back
+        to the plain reward and the whole mechanism was inert.
+        """
+        active = (spike_counts[self.topology.kenyon_indices] > 0).astype(np.float32)
+        norm = float(np.linalg.norm(active))
+        return active / norm if norm > 0 else active
+
+    def value_of(self, spike_counts: np.ndarray) -> float:
+        """Estimated value of the situation the mushroom body is currently representing."""
+        return float(np.dot(self.value_weights, self._features(spike_counts)))
+
+    def apply_reinforcement(
+        self,
+        reward: float,
+        spike_counts: np.ndarray | None = None,
+        terminal: bool = False,
+    ):
         """Apply the third factor (dopamine) to the eligible synapses.
 
-        Dopamine carries a reward *prediction error*, not the raw reward. In this fight
-        the two are very different quantities: a clean hit from Iudex is worth about
-        -2.8 and lands three times as often as the +0.5 the fly earns for a hit of its
-        own, so feeding the raw signal through delivers a net negative burst on every
-        reinforcing event. That depresses whichever compartment was active, which
-        quietens the descending pools, which makes the fly act less - and doing nothing
-        is the one behaviour that can never be punished, because it owns no compartment.
-        Subtracting a running baseline makes "better than expected" the thing that gets
-        reinforced, which is both what dopaminergic neurons actually encode and what
-        stops the circuit from learning to stand still.
+        Dopamine carries a temporal-difference error, not the raw reward:
+
+            delta = r + gamma * V(s') - V(s)
+
+        The distinction decides whether the fly can learn to dodge at all. SoulsGym pays
+        for damage dealt and damage taken and for nothing else, so a successful dodge
+        produces a reward of exactly zero - indistinguishable, to a plain reward signal,
+        from standing still. Every attack survived teaches nothing. With a value
+        estimate, being in front of a winding-up boss is worth less than being past the
+        swing, so coming through it unhurt is a positive prediction error and the roll
+        that achieved it gets reinforced. This is also what midbrain dopamine neurons
+        actually encode.
 
         Args:
-            reward: < 0 aversive (PPL1 burst), > 0 rewarding (PAM burst).
+            reward: The environment's reward for the step just taken.
+            spike_counts: Current spikes, used to evaluate the new situation. Without
+                them this falls back to the plain reward signal.
+            terminal: True on the last step of an episode, where there is no future.
         """
-        if len(self.edges) == 0 or abs(reward) < 1e-4:
+        if len(self.edges) == 0:
             return
-        prediction_error = reward - self.reward_baseline
-        self.reward_baseline += self.rpe_baseline_rate * prediction_error
-        self.dopamine_level = float(np.tanh(prediction_error / self.rpe_scale))
+
+        if spike_counts is None:
+            # No state available: fall back to a running-baseline prediction error.
+            if abs(reward) < 1e-4:
+                return
+            error = reward - self.reward_baseline
+            self.reward_baseline += self.rpe_baseline_rate * error
+        else:
+            features = self._features(spike_counts)
+            value_now = 0.0 if terminal else float(np.dot(self.value_weights, features))
+            self.last_value = value_now
+            if self._prev_features is None:
+                # Nothing to compare against yet; remember this step and wait.
+                self._prev_features = features
+                self._prev_value = value_now
+                return
+            error = reward + self.discount * value_now - self._prev_value
+            # Critic update: move the previous state's value towards what followed it.
+            self.value_weights += (self.critic_lr * error) * self._prev_features
+            self._prev_features = None if terminal else features
+            self._prev_value = 0.0 if terminal else value_now
+
+        self.last_td_error = float(error)
+        if self._adaptive_scale:
+            self._delta_magnitude += 0.01 * (abs(error) - self._delta_magnitude)
+            scale = max(1e-3, self._delta_magnitude)
+        else:
+            scale = self.rpe_scale
+        self.dopamine_level = float(np.tanh(error / scale))
         if abs(self.dopamine_level) < 1e-3:
             return
 
@@ -153,8 +226,6 @@ class DopaminePlasticity:
             self.total_ltd_events += int(np.count_nonzero(delta_w < -1e-4))
 
         self._homeostatic_scaling()
-        # Dopamine delivery consumes the eligibility trace.
-        self.eligibility *= 0.1
 
     def _homeostatic_scaling(self):
         """Guard rail keeping a compartment from saturating or going permanently silent.
@@ -205,6 +276,8 @@ class DopaminePlasticity:
         self.eligibility.fill(0.0)
         self.credit.fill(0.0)
         self.dopamine_level = 0.0
+        self._prev_features = None
+        self._prev_value = 0.0
 
     # -------------------------------------------------------------- persistence
 
@@ -222,6 +295,8 @@ class DopaminePlasticity:
                 path,
                 weights=self.topology.weight[self.edges],
                 reward_baseline=self.reward_baseline,
+                value_weights=self.value_weights,
+                delta_magnitude=self._delta_magnitude,
                 total_ltp=self.total_ltp_events,
                 total_ltd=self.total_ltd_events,
                 num_edges=len(self.edges),
@@ -242,6 +317,12 @@ class DopaminePlasticity:
                 return False  # A different circuit; the weights are not transferable.
             self.topology.weight[self.edges] = weights.astype(np.float32)
             self.reward_baseline = float(blob["reward_baseline"])
+            if "delta_magnitude" in blob:
+                self._delta_magnitude = float(blob["delta_magnitude"])
+            if "value_weights" in blob:
+                vw = blob["value_weights"]
+                if vw.shape == self.value_weights.shape:
+                    self.value_weights = vw.astype(np.float32)
             self.total_ltp_events = int(blob["total_ltp"])
             self.total_ltd_events = int(blob["total_ltd"])
             return True

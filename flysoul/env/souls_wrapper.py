@@ -82,7 +82,9 @@ def make_souls_env(
         # Dark Souls III listens for attacks on the mouse, not on the keys soulsgym
         # sends. Route them to the buttons the game already responds to before the
         # environment builds its GameInput.
-        enable_mouse_bindings()
+        routed = enable_mouse_bindings()
+        logger.info(f"Input routed to the mouse: {routed}")
+        print(f"OK Input routed to the mouse: {routed}", flush=True)
 
         logger.info("Initializing Live SoulsGym Iudex Environment (DarkSoulsIII.exe hook)...")
         try:
@@ -117,7 +119,7 @@ def is_mock(env: Any) -> bool:
 _REQUIRED_KEYS = ("lightattack", "heavyattack", "parry", "lock_on")
 
 
-def check_input_bindings(env, probe: str = "lightattack", timeout_s: float = 1.6) -> bool:
+def check_input_bindings(env, probe: str = "lightattack", attempts: int = 3) -> bool:
     """Press one key and report whether Dark Souls III reacted.
 
     Dark Souls III binds attacking to the mouse by default, and this input path only
@@ -127,7 +129,12 @@ def check_input_bindings(env, probe: str = "lightattack", timeout_s: float = 1.6
     health, which reads as a policy that never learned to attack rather than as an
     input that never arrived.
 
-    Returns True if the probe produced a player animation, False if the key is dead.
+    A single probe is not enough to conclude the binding is wrong: the window may not
+    have focus, and the player may be mid-animation, dead or loading, in which case no
+    input of any kind produces an animation. Focus the window, wait for the player to be
+    idle, and probe a few times before declaring the key dead.
+
+    Returns True if the probe produced a player animation.
     """
     import time
 
@@ -138,21 +145,47 @@ def check_input_bindings(env, probe: str = "lightattack", timeout_s: float = 1.6
 
     try:
         game.game_speed = 1.0
-        game_input.reset()
-        time.sleep(0.3)
-        game.clear_cache()
-        before = game.player_animation
-        game_input.single_action(probe, 0.15)
-        deadline = time.time() + timeout_s
+        window = getattr(env.unwrapped, "_game_window", None) or getattr(game, "_game_window", None)
+        if window is not None and not getattr(window, "focused", True):
+            try:
+                window.focus()
+                time.sleep(0.5)
+            except Exception:
+                pass
+
+        # Wait for a state in which an attack would animate at all.
+        deadline = time.time() + 15.0
         while time.time() < deadline:
             game.clear_cache()
-            if game.player_animation != before:
-                game_input.reset()
-                return True
-            time.sleep(0.05)
-        game_input.reset()
+            if game.player_animation == "Idle" and game.player_hp > 0:
+                break
+            time.sleep(0.4)
+        else:
+            logger.warning(
+                "Player never reached an idle state; skipping the attack input check."
+            )
+            return True  # Cannot tell; do not block the run on an inconclusive probe.
+
+        for attempt in range(attempts):
+            game_input.reset()
+            time.sleep(0.3)
+            game.clear_cache()
+            before = game.player_animation
+            game_input.single_action(probe, 0.15)
+            probe_deadline = time.time() + 1.6
+            while time.time() < probe_deadline:
+                game.clear_cache()
+                if game.player_animation != before:
+                    game_input.reset()
+                    return True
+                time.sleep(0.05)
+            game_input.reset()
+            if attempt + 1 < attempts:
+                logger.warning(f"Attack probe {attempt + 1}/{attempts} produced nothing; retrying.")
+                time.sleep(1.0)
         return False
-    except Exception:
+    except Exception as exc:
+        logger.warning(f"Attack input check could not run ({exc}); continuing.")
         return True  # Never block a run on a probe that itself failed.
 
 

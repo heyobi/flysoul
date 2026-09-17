@@ -65,7 +65,8 @@ pathways, and the "winner" is decided by whatever constants the readout happens 
 
 * **Membrane Potential:** $\tau_m \frac{dV}{dt} = -(V - V_{\text{rest}}) + R I_{\text{syn}} + R I_{\text{ext}}$
 * **Parameters:** $dt = 0.1$ms, $\tau_m = 20$ms, $\tau_s = 5$ms, delay $= 1.8$ms, $V_{\text{rest}} = -52$mV, $V_{\text{thresh}} = -45$mV.
-* **Plasticity:** Three-factor STDP. Eligibility traces $e_{ij}(t)$ updated on pre-post spike coincidence, gated by dopamine reward ($\text{PAM}$) / punishment ($\text{PPL101}$), and **credited to the compartment of the action the fly actually executed** via an efference copy.
+* **Plasticity:** Three-factor STDP. Eligibility traces $e_{ij}(t)$ updated on pre-post spike coincidence, gated by dopamine and **credited to the compartment of the action the fly actually executed** via an efference copy.
+* **Dopamine carries a temporal-difference error,** $\delta = r + \gamma V(s') - V(s)$, where $V$ is read linearly off the sparse Kenyon cell population and learned by TD. This is not a refinement — it decides whether dodging is learnable at all. SoulsGym pays for damage dealt and damage taken and for nothing else, so a successful dodge scores exactly zero: indistinguishable, to a plain reward signal, from standing still. Measured against a mock whose reward matches SoulsGym's, the plain signal collapses to **zero hits by episode 150** with `parry` the most-reinforced channel, while the TD signal improves monotonically across 200 episodes (1.80 → 2.20 hits, 0.50 → 0.90 dodges).
 
 ### Homeostatic calibration
 
@@ -87,7 +88,19 @@ rebuild. Calibration is deterministic, so the cache changes nothing about the ci
 * **Efference copy cancels self-generated optic flow.** A fly walking forward sees the
   target expand; without cancellation the looming pathway reads its own approach as an
   incoming object and fires the escape reflex, so the agent walks, frightens itself,
-  rolls away, and repeats forever.
+  rolls away, and repeats forever. Only the *predicted* component is cancelled, from a
+  forward model the fly learns from its own displacement — damping the whole signal
+  throws away the boss's approach along with the fly's own.
+
+### The mock's reward must match the game's
+
+`MockIudexEnv` exists to make offline measurement meaningful, which it only is while the
+two environments score the same things. An earlier version paid +0.5 for a successful
+dodge. Nothing in SoulsGym does, and that single line made evasion look readily
+learnable offline while it was structurally impossible in the game — so every conclusion
+drawn from the mock about dodging was wrong, and the live agent sat flat for a hundred
+episodes before the discrepancy surfaced. Before adding a reward term here, read
+`IudexEnv.compute_reward` and match it.
 
 ---
 

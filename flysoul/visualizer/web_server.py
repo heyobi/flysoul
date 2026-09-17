@@ -17,7 +17,7 @@ import numpy as np
 
 HTML_PATH = Path(__file__).parent / "index.html"
 
-from flysoul.connectome.graph import CircuitTopology
+from flysoul.connectome.graph import ACTION_CHANNELS, CircuitTopology
 
 # Global event broadcast queue for Server-Sent Events (SSE)
 _subscriber_queues: List[queue.Queue] = []
@@ -58,11 +58,25 @@ def set_topology(topology: CircuitTopology):
             if weight > 1.2 or (idx % 10 == 0):
                 edge_pairs.append([pre, post, round(weight, 2)])
 
+    # Population sizes, so the client can label the anatomy from the real circuit
+    # instead of a hard-coded list that silently goes stale when the wiring changes.
+    populations: Dict[str, int] = {}
+    for label in topology.labels:
+        populations[label] = populations.get(label, 0) + 1
+
     _topology_data = {
         "num_neurons": num_n,
         "coords": topology.coords.tolist(),
         "labels": topology.labels,
         "edges": edge_pairs[:4000],  # Top 4,000 synaptic pathways
+        # Sign per neuron: the circuit is sign-constrained, and which cells inhibit is
+        # the single most informative thing to see in the anatomy.
+        "inhibitory": [int(s < 0) for s in topology.neuron_sign.tolist()],
+        "action_channels": list(ACTION_CHANNELS),
+        "populations": populations,
+        "num_inhibitory": int((topology.neuron_sign < 0).sum()),
+        "num_synapses": int(len(topology.post)),
+        "num_plastic": int(topology.plastic_synapse_mask.sum()),
     }
 
 

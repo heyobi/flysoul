@@ -35,16 +35,48 @@ logger = logging.getLogger(__name__)
 # X11 button numbers.
 MOUSE_BUTTONS = {"mouse1": 1, "mouse2": 2, "mouse3": 3, "mouse4": 4, "mouse5": 5}
 
+# Pixels of pointer motion per camera action. The camera setter nudges repeatedly and
+# re-checks, so this only has to be small enough not to overshoot its 0.05 rad tolerance.
+CAMERA_STEP_PX = 7
+
+# Relative pointer motion, which is how Dark Souls III turns the camera.
+MOUSE_MOTION = {
+    "mouseleft": (-1, 0),
+    "mouseright": (1, 0),
+    "mouseup": (0, -1),
+    "mousedown": (0, 1),
+}
+
 # Dark Souls III's own defaults, which is the point: nothing in the game changes.
 DEFAULT_MOUSE_BINDINGS = {
     "lightattack": "mouse1",
     "heavyattack": "shift+mouse1",
     "parry": "mouse3",
+    # The camera keys move nothing at all in an unbound game, and the camera is not a
+    # cosmetic detail: SoulsGym aims it at the boss before pressing lock on, and
+    # `camera_pose` is a setter that drives those same keys rather than writing memory.
+    # With them dead the whole aiming path is dead, lock-on only happens when the boss
+    # wanders into view by itself, and until it does the fly's movement is
+    # camera-relative and points wherever the camera was left.
+    "cameraleft": "mouseleft",
+    "cameraright": "mouseright",
+    "cameraup": "mouseup",
+    "cameradown": "mousedown",
 }
 
 _MODIFIER_KEYSYMS = {"shift": b"Shift_L", "ctrl": b"Control_L", "alt": b"Alt_L"}
 
 _PATCH_FLAG = "_flysoul_mouse_patched"
+
+
+def _parse_motion(key: str):
+    """Return ``(dx, dy)`` in pixels for a pointer-motion binding, else None."""
+    if not isinstance(key, str):
+        return None
+    direction = MOUSE_MOTION.get(key.strip().lower())
+    if direction is None:
+        return None
+    return direction[0] * CAMERA_STEP_PX, direction[1] * CAMERA_STEP_PX
 
 
 def _parse(key: str):
@@ -82,6 +114,12 @@ def _install_backend_patch(x11_keyboard_cls) -> bool:
             ctypes.c_int,
             ctypes.c_ulong,
         ]
+        self._xtst.XTestFakeRelativeMotionEvent.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_ulong,
+        ]
         self._flysoul_mouse_ready = True
 
     def _modifier_keycode(self, modifier: str) -> int:
@@ -90,6 +128,12 @@ def _install_backend_patch(x11_keyboard_cls) -> bool:
         )
 
     def press(self, key: str):
+        motion = _parse_motion(key)
+        if motion is not None:
+            _ensure_mouse(self)
+            self._xtst.XTestFakeRelativeMotionEvent(self._display, motion[0], motion[1], 0)
+            self._x11.XFlush(self._display)
+            return
         parsed = _parse(key)
         if parsed is None:
             return original_press(self, key)
@@ -104,6 +148,8 @@ def _install_backend_patch(x11_keyboard_cls) -> bool:
         self._x11.XFlush(self._display)
 
     def release(self, key: str):
+        if _parse_motion(key) is not None:
+            return  # Motion is instantaneous; there is nothing held down to let go of.
         parsed = _parse(key)
         if parsed is None:
             return original_release(self, key)

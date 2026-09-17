@@ -31,6 +31,13 @@ SOULSGYM_ROLL = {"advance": 8, "strafe_right": 10, "retreat": 12, "strafe_left":
 SOULSGYM_ATTACK = {"attack_light": 16, "attack_heavy": 17, "parry": 18}
 SOULSGYM_IDLE = 19
 
+# Channels whose meaning depends on the camera frame. With lock-on they are measured
+# against the boss; without it the game applies them against the camera, and the
+# action space has no camera control, so an unlocked fly cannot steer at all.
+DIRECTIONAL_CHANNELS = frozenset(SOULSGYM_WALK) | {"roll"}
+# These swing where the body already faces, so they stay usable while unlocked.
+NON_DIRECTIONAL_CHANNELS = frozenset(SOULSGYM_ATTACK)
+
 # Mock environment action IDs (flysoul.env.mock_env.MockIudexEnv)
 MOCK_ACTIONS = {
     IDLE: 0,
@@ -162,7 +169,7 @@ class MotorDecoder:
         """
         if mock:
             return self.to_mock_action(channel), channel
-        if not lock_on:
+        if not lock_on and channel in DIRECTIONAL_CHANNELS:
             return SOULSGYM_IDLE, IDLE
         return self.to_soulsgym_action(channel, rates), channel
 
@@ -173,7 +180,7 @@ class MotorDecoder:
 
     @staticmethod
     def channels_for_valid_actions(
-        valid_actions: Sequence[int] | None, mock: bool = False
+        valid_actions: Sequence[int] | None, mock: bool = False, lock_on: bool = True
     ) -> set[str] | None:
         """Map an environment's valid-action mask onto the channels it permits.
 
@@ -186,9 +193,15 @@ class MotorDecoder:
         when there is no mask at all. Collapsing the two means that the moment the game
         reports the player is locked mid-animation, the readout becomes *unconstrained*
         and issues a swing the game then throws away.
+
+        Losing lock-on narrows the mask to the non-directional channels rather than
+        stopping the fly outright. Holding position while the camera comes back keeps it
+        from sprinting off, but standing still in front of Iudex is its own way to lose
+        the fight; swinging where it already faces at least stays in the exchange, and
+        the environment re-establishes the lock on its own within a few steps.
         """
         if valid_actions is None:
-            return None
+            return NON_DIRECTIONAL_CHANNELS if not lock_on else None
         valid = set(int(a) for a in valid_actions)
         allowed: set[str] = set()
 
@@ -206,4 +219,6 @@ class MotorDecoder:
                 allowed.add(channel)
         if any(a in valid for a in SOULSGYM_ROLL.values()):
             allowed.add("roll")
+        if not lock_on:
+            allowed &= NON_DIRECTIONAL_CHANNELS
         return allowed

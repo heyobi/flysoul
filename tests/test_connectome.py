@@ -8,7 +8,12 @@ from flysoul.connectome.engine import ConnectomeEngine
 from flysoul.connectome.graph import ACTION_CHANNELS, build_fly_circuit
 from flysoul.connectome.plasticity import DopaminePlasticity
 from flysoul.env.mock_env import MockIudexEnv
-from flysoul.env.obs import IUDEX_ATTACK_IDS, CombatState, parse_obs
+from flysoul.env.obs import (
+    IUDEX_ATTACK_IDS,
+    PLAYER_HEADING_OFFSET,
+    CombatState,
+    parse_obs,
+)
 from flysoul.motor.decoder import IDLE, MOCK_ACTIONS, MotorDecoder
 from flysoul.sensory.encoder import SensoryEncoder
 
@@ -198,7 +203,35 @@ def test_parse_obs_geometry():
     }
     state = parse_obs(obs)
     assert state.distance == pytest.approx(5.0)  # 3-4-5, z is elevation and excluded
-    assert state.angle == pytest.approx(np.arctan2(4.0, 3.0))
+    # pose[3] is a yaw whose zero is not the +x axis; PLAYER_HEADING_OFFSET carries the
+    # measured correction. See test_facing_the_boss_reads_as_straight_ahead for the
+    # invariant that actually matters.
+    expected = np.arctan2(4.0, 3.0) + PLAYER_HEADING_OFFSET
+    expected = (expected + np.pi) % (2 * np.pi) - np.pi
+    assert state.angle == pytest.approx(expected)
+
+
+def test_facing_the_boss_reads_as_straight_ahead():
+    """A player facing the boss must see it dead ahead.
+
+    This is the invariant the heading convention has to satisfy. Measured against the
+    live game with lock-on held - where the character provably faces the boss - the
+    original formula read -146 degrees instead of 0, and that bearing feeds the retinal
+    map the circuit steers by, so the pursuit and strafe pathways were being driven by a
+    boss that appeared behind the fly.
+    """
+    for bearing in (0.0, 1.0, -2.0, 3.0):
+        dx, dy = float(np.cos(bearing)), float(np.sin(bearing))
+        # A heading that means "facing along `bearing`" in the game's own convention.
+        heading = bearing + PLAYER_HEADING_OFFSET
+        obs = {
+            "player_pose": np.array([0.0, 0.0, 0.0, heading], dtype=np.float32),
+            "boss_pose": np.array([dx * 5, dy * 5, 0.0, 0.0], dtype=np.float32),
+            "player_hp": 454.0, "player_max_hp": 454.0,
+            "boss_hp": 1037.0, "boss_max_hp": 1037.0,
+            "boss_animation": 23,
+        }
+        assert parse_obs(obs).angle == pytest.approx(0.0, abs=1e-5)
 
 
 def test_plasticity_credits_only_the_executed_channel(topology):
@@ -260,3 +293,79 @@ def test_entrypoint_and_scripts_compile():
     targets = [root / "run.py", *sorted((root / "scripts").glob("*.py"))]
     for path in targets:
         py_compile.compile(str(path), doraise=True)
+
+
+def test_value_critic_starts_neutral(topology):
+    """Before the critic has learned anything, dopamine must be the plain reward.
+
+    A new mechanism that changes behaviour on step one is impossible to A/B against the
+    old one.
+    """
+    plasticity = DopaminePlasticity(topology)
+    spikes = np.zeros(topology.num_neurons, dtype=np.int32)
+    spikes[topology.kenyon_indices[:10]] = 2
+    assert np.all(plasticity.value_weights == 0.0)
+    assert plasticity.value_of(spikes) == 0.0
+
+
+def test_avoided_punishment_is_reinforcing(topology):
+    """Surviving a situation that predicts damage must be a positive signal.
+
+    SoulsGym pays for damage dealt and damage taken and nothing else, so a dodged attack
+    scores exactly zero - identical, to a plain reward signal, to standing still. The fly
+    then cannot learn to dodge at all. With a value estimate, leaving a state that
+    predicts damage is a positive prediction error even though the reward is zero.
+    """
+    plasticity = DopaminePlasticity(topology, learning_rate=0.5)
+
+    danger = np.zeros(topology.num_neurons, dtype=np.int32)
+    danger[topology.kenyon_indices[:20]] = 3
+    safe = np.zeros(topology.num_neurons, dtype=np.int32)
+    safe[topology.kenyon_indices[40:60]] = 3
+
+    # Teach the critic that the danger state is followed by damage.
+    for _ in range(40):
+        plasticity.apply_reinforcement(0.0, danger)
+        plasticity.apply_reinforcement(-1.0, danger)
+        plasticity._prev_features = None  # start each lesson fresh
+    assert plasticity.value_of(danger) < -0.01, "the danger state should have learned a cost"
+
+    # Now leave that state without being hit: reward is zero, dopamine must be positive.
+    plasticity._prev_features = None
+    plasticity.apply_reinforcement(0.0, danger)   # enter danger, establishes V(s)
+    plasticity.apply_reinforcement(0.0, safe)     # escape it, no reward at all
+    assert plasticity.dopamine_level > 0.0, "escaping predicted damage must reinforce"
+
+
+def test_terminal_step_has_no_future_value(topology):
+    plasticity = DopaminePlasticity(topology)
+    spikes = np.zeros(topology.num_neurons, dtype=np.int32)
+    spikes[topology.kenyon_indices[:10]] = 2
+    plasticity.apply_reinforcement(0.0, spikes)
+    plasticity.apply_reinforcement(-1.0, spikes, terminal=True)
+    assert plasticity.last_value == 0.0
+    # And the carry-over is cleared so the next episode does not bridge across the death.
+    assert plasticity._prev_features is None
+
+
+def test_dopamine_scale_adapts_to_the_reward_scale(topology):
+    """The saturation point must not encode an assumption about how big rewards are.
+
+    The mock pays about ten times what SoulsGym does for the same event, so a constant
+    tuned against one delivers a much weaker learning signal in the other - a difference
+    that looks like the algorithm failing in the game when it is only a mis-set scale.
+    """
+    spikes = np.zeros(topology.num_neurons, dtype=np.int32)
+    spikes[topology.kenyon_indices[:20]] = 2
+
+    def dopamine_after(magnitude, steps=400):
+        pl = DopaminePlasticity(topology)
+        for i in range(steps):
+            pl.apply_reinforcement(magnitude if i % 2 else -magnitude, spikes)
+        return abs(pl.dopamine_level)
+
+    small = dopamine_after(0.05)   # SoulsGym-scale rewards
+    large = dopamine_after(0.50)   # mock-scale rewards
+    assert small > 0.1, "a small-reward environment must still produce a usable signal"
+    # Both environments end up driving dopamine into a comparable range.
+    assert abs(small - large) < 0.5
