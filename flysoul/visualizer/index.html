@@ -173,6 +173,20 @@
     .pool.blocked { opacity: 0.32; }
     .pool-foot { font-size: 10.5px; color: var(--text-3); margin-top: 8px; line-height: 1.5; }
 
+    /* sleep: the brain consolidates while the game reloads */
+    #dream { position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0; transition: opacity 1.5s;
+             background: radial-gradient(ellipse at 50% 42%, rgba(99,102,241,0.24), rgba(3,4,6,0) 62%); }
+    body.sleeping #dream { opacity: 1; animation: breathe 4.5s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+    body.sleeping .live i { background: #818cf8; box-shadow: 0 0 10px #818cf8; animation: breathe 2.5s infinite; }
+    #sleep-bar { display: none; height: 3px; margin: 10px auto 0; width: 220px; max-width: 100%;
+                 background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+    #sleep-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #6366f1, #c084fc);
+                   transition: width 0.25s linear; }
+    body.sleeping #sleep-bar { display: block; }
+    body.sleeping #cmd { color: #a5b4fc !important; text-shadow: 0 0 28px rgba(129,140,248,0.8); }
+    body.sleeping .eyebrow.sleep-eyebrow { color: #a5b4fc; }
+
     /* hover tooltip */
     #tip { position: absolute; z-index: 20; pointer-events: none; display: none;
            background: var(--panel-strong); border: 1px solid var(--hair-strong); border-radius: 6px;
@@ -223,6 +237,7 @@
 <body data-tab="combat">
   <div id="stage"></div>
   <div id="vignette"></div>
+  <div id="dream"></div>
   <div id="hint">drag to orbit · scroll to zoom · hover a neuron</div>
   <div id="tip"></div>
 
@@ -272,6 +287,10 @@
         <span>TD error <b class="num" id="td">+0.00</b></span>
         <span>LTP <b class="num" id="ltp">0</b></span>
         <span>LTD <b class="num" id="ltd">0</b></span>
+      </div>
+      <div class="kv" title="Between fights the fly replays remembered fights through the same dopamine plasticity, the way mushroom body memories consolidate in sleep">
+        <span>Sleep <b id="sleep-stat">not yet</b></span>
+        <span id="sleep-note">replays fights while the game reloads</span>
       </div>
     </div>
   </section>
@@ -323,9 +342,10 @@
 
   <!-- lower third -->
   <section class="card" id="lower-third">
-    <div class="eyebrow">descending command</div>
+    <div class="eyebrow sleep-eyebrow" id="cmd-eyebrow">descending command</div>
     <div id="cmd">—</div>
     <div id="cmd-sub">winner of the premotor competition</div>
+    <div id="sleep-bar"><i></i></div>
   </section>
 
   <nav id="tabs">
@@ -417,12 +437,13 @@ const POINT_VS = `
     gl_Position = projectionMatrix * mv;
   }`;
 const POINT_FS = `
-  varying vec3 vColor; varying float vAct; varying float vVis;
+  varying vec3 vColor; varying float vAct; varying float vVis; uniform float uDream;
   void main() {
     vec2 d = gl_PointCoord - 0.5; float r = length(d) * 2.0; if (r > 1.0) discard;
     float core = smoothstep(1.0, 0.0, r);
     float glow = pow(core, 2.4);
-    vec3 col = mix(vColor, vec3(1.0), vAct * 0.85);
+    vec3 hot = mix(vec3(1.0), vec3(0.66, 0.60, 1.0), uDream);
+    vec3 col = mix(vColor, hot, vAct * 0.85);
     float a = (0.15 + 0.85 * vAct) * glow * (0.10 + 0.90 * vVis);
     gl_FragColor = vec4(col * (0.65 + 1.6 * vAct), a);
   }`;
@@ -466,7 +487,7 @@ function build(data) {
   const mat = new THREE.ShaderMaterial({
     vertexShader: POINT_VS, fragmentShader: POINT_FS, vertexColors: true, transparent: true,
     depthWrite: false, blending: THREE.AdditiveBlending,
-    uniforms: { uSize: { value: 3.6 }, uScale: { value: innerHeight / 2 } },
+    uniforms: { uSize: { value: 3.6 }, uScale: { value: innerHeight / 2 }, uDream: { value: 0 } },
   });
   points = new THREE.Points(geo, mat); scene.add(points);
 
@@ -677,11 +698,55 @@ function drawCharts() {
   spark('c1', hist.boss, '#fb7185'); spark('c2', hist.steps, '#7dd3fc'); spark('c3', hist.hits, '#fbbf24');
 }
 
+function setDopamine(v) {
+  const m = document.getElementById('da-marker');
+  m.style.left = Math.max(2, Math.min(98, 50 + v * 45)) + '%';
+  m.style.background = v < -0.02 ? 'var(--rose)' : v > 0.02 ? 'var(--green)' : 'var(--amber)';
+  m.style.boxShadow = `0 0 12px ${m.style.background}`;
+}
+
+// Sleep. The agent files each fight as it happens and, while the game reloads, replays
+// the remembered fights through the same dopamine plasticity. On screen the brain dims
+// to indigo, the replayed spikes glow in that tone instead of white, and the lower third
+// says which fight is being dreamed.
+let sleeping = false;
+function handleSleep(d) {
+  const $ = id => document.getElementById(id);
+  if (d.phase === 'start') {
+    sleeping = true; document.body.classList.add('sleeping');
+    setLive(true, 'sleeping · consolidating');
+    $('cmd-eyebrow').textContent = 'sleep · memory consolidation';
+    $('cmd').textContent = 'dreaming'; $('cmd').style.color = '';
+    $('cmd-sub').textContent = `replaying ${d.episodes_in_memory} remembered fights · ${d.passes} passes`;
+    $('sleep-bar').firstElementChild.style.width = '0%';
+  } else if (d.phase === 'replay') {
+    if (!sleeping) handleSleep({ phase: 'start', episodes_in_memory: '—', passes: d.of });
+    $('sleep-bar').firstElementChild.style.width = Math.round(d.progress * 100) + '%';
+    const act_ = d.action_name ? d.action_name.replace(/_/g, ' ') : '';
+    $('cmd-sub').textContent = `fight ${d.memory_episode} · pass ${d.pass}/${d.of} · ${act_}`;
+    if (act && d.spikes) for (const i of d.spikes) if (i < N) act[i] = 1;
+    if (d.dopamine !== undefined) setDopamine(d.dopamine);
+    if (d.td_error !== undefined) $('td').textContent = (d.td_error >= 0 ? '+' : '') + d.td_error.toFixed(2);
+  } else if (d.phase === 'end') {
+    sleeping = false; document.body.classList.remove('sleeping');
+    setLive(true, 'live connectome');
+    $('cmd-eyebrow').textContent = 'descending command';
+    $('cmd').textContent = 'awake';
+    $('cmd-sub').textContent = 'winner of the premotor competition';
+    $('sleep-stat').textContent = `${d.passes} passes · ${d.transitions} replays · Δw ${(d.weight_shift * 100).toFixed(1)}%`;
+    $('sleep-note').textContent = `${d.duration_s.toFixed(1)} s while the game reloaded`;
+    if (d.mean_weight !== undefined) $('wavg').textContent = 'w̄ ' + d.mean_weight.toFixed(3);
+    if (d.channel_weights) updatePools({ channel_weights: d.channel_weights });
+    isolate(selectedFamily);
+  }
+}
+
 const src = new EventSource('/api/stream');
 src.onopen = () => setLive(true, 'live connectome');
 src.onerror = () => setLive(false, 'reconnecting');
 src.onmessage = e => {
   const d = JSON.parse(e.data);
+  if (d.type === 'sleep') { handleSleep(d); return; }
   const $ = id => document.getElementById(id);
   const pct = v => Math.round(v * 100) + '%';
 
@@ -714,12 +779,7 @@ src.onmessage = e => {
     const c = $('cmd'); c.textContent = d.action_name.replace(/_/g, ' ');
     c.style.color = CHANNEL_COLOURS[d.action_name] || '#e5e7eb';
   }
-  if (d.dopamine !== undefined) {
-    const p = Math.max(2, Math.min(98, 50 + d.dopamine * 45));
-    $('da-marker').style.left = p + '%';
-    $('da-marker').style.background = d.dopamine < -0.02 ? 'var(--rose)' : d.dopamine > 0.02 ? 'var(--green)' : 'var(--amber)';
-    $('da-marker').style.boxShadow = `0 0 12px ${$('da-marker').style.background}`;
-  }
+  if (d.dopamine !== undefined) setDopamine(d.dopamine);
   if (d.mean_weight !== undefined) $('wavg').textContent = 'w̄ ' + d.mean_weight.toFixed(3);
   if (d.state_value !== undefined) { const el = $('vstate'); el.textContent = d.state_value.toFixed(2);
     el.style.color = d.state_value < -0.01 ? 'var(--rose)' : d.state_value > 0.01 ? 'var(--green)' : ''; }
@@ -740,9 +800,16 @@ function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta());
   if (act) {
-    const k = Math.exp(-dt / 0.14);       // 140 ms decay, a shade longer than one env step
+    // 140 ms decay awake, a shade longer than one env step; dreams linger.
+    const k = Math.exp(-dt / (sleeping ? 0.34 : 0.14));
     for (let i = 0; i < N; i++) act[i] *= k;
     actAttr.needsUpdate = true;
+    const u = points.material.uniforms.uDream;
+    u.value += ((sleeping ? 1 : 0) - u.value) * Math.min(1, dt * 1.5);
+    if (sleeping && selectedFamily === null) {
+      const breath = 0.3 + 0.16 * Math.sin(clock.elapsedTime * 1.3);
+      hulls.children.forEach(h => { h.material.uniforms.uAlpha.value = breath; });
+    }
     if (edgeLines && edgeLines.visible) {
       for (let e = 0; e < edges.length; e++) {
         const a = act[edges[e][0]], b = e * 3, o = e * 6;

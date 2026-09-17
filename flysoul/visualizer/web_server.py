@@ -466,6 +466,8 @@ INDEX_HTML = """<!DOCTYPE html>
 
 class VisualizerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # Cache-busting query strings (frame.jpg?t=...) are not part of the route.
+        self.path = self.path.split("?", 1)[0]
         if self.path == "/" or self.path == "/index.html":
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

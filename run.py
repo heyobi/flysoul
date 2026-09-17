@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import threading
 import time
 import numpy as np
 
@@ -32,6 +33,7 @@ from flysoul.connectome.calibration import _topology_fingerprint, calibrate_or_l
 from flysoul.connectome.engine import ConnectomeEngine
 from flysoul.connectome.graph import build_fly_circuit
 from flysoul.connectome.plasticity import DopaminePlasticity
+from flysoul.connectome.sleep import SleepConsolidation
 from flysoul.env.obs import PLAYER_HEADING_OFFSET, parse_obs
 from flysoul.env.souls_wrapper import (
     BINDING_HELP,
@@ -106,6 +108,19 @@ def parse_args():
                              "is undamaged. Disengaging scores exactly zero in SoulsGym, "
                              "which beats any exchange that costs health, so without this "
                              "a well-optimised agent learns to run away and never fight.")
+    parser.add_argument("--sleep-passes", type=int, default=30,
+                        help="How many remembered fights the fly replays through its "
+                             "plasticity between episodes, while the game reloads. The "
+                             "SoulsGym reference agent reused each sample dozens of times "
+                             "from a replay buffer; this is the biological version of that. "
+                             "0 disables sleep.")
+    parser.add_argument("--sleep-memory", type=int, default=20,
+                        help="How many recent fights sleep can draw on.")
+    parser.add_argument("--sleep-gain", type=float, default=0.5,
+                        help="Learning-rate multiplier during replay, so a pass is a "
+                             "consolidation rather than a full new lesson.")
+    parser.add_argument("--no-sleep", action="store_true",
+                        help="Do not replay fights between episodes.")
     parser.add_argument("--no-memory", action="store_true",
                         help="Do not load or save learned synapses; start from the innate circuit.")
     parser.add_argument("--skip-input-check", action="store_true",
@@ -217,6 +232,18 @@ def main():
 
     topology, engine, encoder, decoder, plasticity, memory_path = build_agent(args, console)
 
+    sleep = None
+    if not args.no_sleep and not args.no_learning and args.sleep_passes > 0:
+        sleep = SleepConsolidation(
+            memory_episodes=args.sleep_memory, passes=args.sleep_passes,
+            gain=args.sleep_gain, seed=args.seed,
+        )
+        console.print(
+            f"[green]OK Sleep consolidation:[/green] between fights the fly replays up to "
+            f"{args.sleep_memory} remembered fights, {args.sleep_passes} passes, at "
+            f"{args.sleep_gain:g}x learning rate."
+        )
+
     enable_web = not args.no_web
     if enable_web:
         set_topology(topology)
@@ -264,6 +291,7 @@ def main():
 
     episode_history = []
     global_action_counts: dict[str, int] = {}
+    pending_sleep = None
 
     try:
         for ep in range(1, total_episodes + 1):
@@ -273,6 +301,10 @@ def main():
                 console.print("[yellow]Starting the episode without lock-on.[/yellow]")
             if not use_mock:
                 report_camera_alignment(env, console, ep)
+            if pending_sleep is not None:
+                # The night ends when the arena is ready; normally it ended long before.
+                finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web)
+                pending_sleep = None
             engine.reset_state()
             encoder.reset()
             plasticity.reset()
@@ -295,11 +327,16 @@ def main():
                 enable_web=enable_web,
                 episode_history=episode_history,
                 global_action_counts=global_action_counts,
+                sleep=sleep,
             )
             episode_history.append(summary)
             if summary["victory"]:
                 victories += 1
-            if not args.no_memory:
+            if sleep is not None:
+                # Consolidate while the game reloads. That is dead time otherwise, and it
+                # is also when the fly's own brain does this.
+                pending_sleep = start_sleep(sleep, plasticity, enable_web, mock_mode, ep)
+            elif not args.no_memory:
                 plasticity.save(memory_path)
 
             if enable_web:
@@ -339,12 +376,84 @@ def main():
         except Exception:
             pass
 
+    if pending_sleep is not None:
+        finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web)
     episodes_run = max(1, len(episode_history))
     console.print(
         f"\n[bold cyan]Simulation Finished.[/bold cyan] "
         f"Victories: [bold green]{victories}/{episodes_run}[/bold green] "
         f"({(victories / episodes_run) * 100:.1f}%)"
     )
+
+
+def start_sleep(sleep, plasticity, enable_web, mock_mode, ep):
+    """Begin replaying remembered fights in the background; returns a handle for finish_sleep.
+
+    The replay itself takes about a second of compute. When someone is watching it is
+    paced to a few seconds so the dreaming is visible, still well inside the time the
+    game spends on its loading screen. The simulator has no loading screen, so there it
+    is kept short.
+    """
+    remembered = sleep.end_episode()
+    if remembered == 0:
+        return None
+    target = 0.0
+    if enable_web:
+        target = 1.5 if mock_mode else 7.0
+    total_hint = sum(len(sleep.memory[i]) for i in sleep.schedule()) or 1
+    # Roughly 150 frames per night is plenty for the viewer and cheap for the browser.
+    every = max(1, total_hint // 150)
+
+    def on_step(p, passes, mem_index, tr, done, total):
+        if not enable_web or (done % every and done != total):
+            return
+        broadcast_event({
+            "type": "sleep", "phase": "replay", "pass": p + 1, "of": passes,
+            "memory_episode": mem_index + 1, "progress": done / max(1, total),
+            "spikes": np.flatnonzero(tr.spikes).tolist(), "action_name": tr.channel,
+            "reward": round(tr.reward, 3),
+            "td_error": round(float(plasticity.last_td_error), 3),
+            "dopamine": round(float(plasticity.dopamine_level), 3),
+        })
+
+    if enable_web:
+        broadcast_event({
+            "type": "sleep", "phase": "start", "episode": ep,
+            "episodes_in_memory": remembered, "passes": sleep.passes,
+        })
+    holder: dict = {}
+
+    def night():
+        holder["report"] = sleep.consolidate(
+            plasticity, on_step=on_step, target_duration_s=target
+        )
+
+    thread = threading.Thread(target=night, name="sleep", daemon=True)
+    thread.start()
+    return thread, holder, ep
+
+
+def finish_sleep(pending, console, plasticity, memory_path, args, enable_web):
+    """Wait for the night to end, report it, and save what was consolidated."""
+    thread, holder, ep = pending
+    thread.join()
+    report = holder.get("report")
+    if report is not None and report.transitions:
+        console.print(
+            f"[dim]sleep after #{ep}: {report.passes} passes over {report.transitions} "
+            f"remembered steps from {report.episodes_in_memory} fights in "
+            f"{report.duration_s:.1f}s; plastic weights moved {report.weight_shift:.1%}[/dim]"
+        )
+        if enable_web:
+            broadcast_event({
+                "type": "sleep", "phase": "end", "episode": ep, "passes": report.passes,
+                "transitions": report.transitions, "duration_s": round(report.duration_s, 2),
+                "weight_shift": round(report.weight_shift, 5),
+                "mean_weight": round(float(plasticity.mean_plastic_weight), 4),
+                "channel_weights": plasticity.channel_weights(),
+            })
+    if not args.no_memory:
+        plasticity.save(memory_path)
 
 
 def ensure_lock_on(env, console, seconds: float = 12.0, quiet: bool = False):
@@ -518,7 +627,7 @@ def reset_episode(env, console, use_mock):
 
 def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, topology,
                 obs, info, args, console, dashboard, enable_web, episode_history,
-                global_action_counts):
+                global_action_counts, sleep=None):
     """Run one fight. Returns the episode summary."""
     ep_reward = 0.0
     hits = 0
@@ -528,6 +637,8 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
     unlocked_steps = 0
     lock_warned = False
     relocks = 0
+    if sleep is not None:
+        sleep.begin_episode()
     step_ms = float(
         getattr(env.unwrapped, "step_seconds", None)
         or getattr(env.unwrapped, "step_size", 0.1)
@@ -612,6 +723,9 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                 plasticity.apply_reinforcement(
                     learning_reward, spike_counts, terminal=bool(terminated or truncated)
                 )
+                if sleep is not None:
+                    sleep.record(spike_counts, channel, learning_reward,
+                                 bool(terminated or truncated))
 
             global_action_counts[channel] = global_action_counts.get(channel, 0) + 1
             episode_actions[channel] = episode_actions.get(channel, 0) + 1
