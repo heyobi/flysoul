@@ -12,12 +12,16 @@ __pycache__/
 *.dylib
 *.dll
 
-# Virtual Environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
+# Virtual Environments.
+# Anchored to the repository root on purpose: an unanchored `env/` matches ANY directory
+# called env at any depth, and on a case-insensitive filesystem `ENV/` matches it too.
+# Between them they silently excluded the whole flysoul/env package - the mock arena and
+# the SoulsGym wrapper - from version control.
+/venv/
+/env/
+/ENV/
+/env.bak/
+/venv.bak/
 
 # Testing & Coverage
 .pytest_cache/
@@ -41,6 +45,9 @@ Moonlight/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Homeostatic calibration cache: a build artifact, regenerated on demand.
+checkpoints/
 
 # Logs & temp files
 *.log

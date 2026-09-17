@@ -27,6 +27,7 @@ def advance_lif(
     cursor: int,
     steps: int,
     dt: float,
+    syn_gain: float,
     v_rest: float,
     v_thresh: float,
     v_reset: float,
@@ -66,9 +67,9 @@ def advance_lif(
             i = queue[slot, q]
             for e in range(ptr[i], ptr[i + 1]):
                 j = post[e]
-                if refractory[j] > 0:
-                    continue
-                g[j] += weight[e]
+                # Conductance accumulates even while the cell is refractory: dropping it
+                # here would discard inhibitory input exactly when it matters most.
+                g[j] += weight[e] * syn_gain
                 if active_flag[j] == 0:
                     active_flag[j] = 1
                     active[nactive[0]] = j
@@ -125,6 +126,12 @@ class ConnectomeEngine:
         self.active_flag = np.zeros(self.num_neurons, dtype=np.uint8)
         self.nactive = np.zeros(1, dtype=np.int32)
 
+        # Background noise amplitude, in the same mV units as the external drive.
+        self.noise_sigma = self.config.noise_sigma_frac * (
+            self.config.v_threshold - self.config.v_rest
+        )
+        self._rng = np.random.default_rng()
+
         # Pre-seed active neurons with all indices initially so driven neurons are processed
         self._reset_active()
 
@@ -133,6 +140,10 @@ class ConnectomeEngine:
         self.active[:] = np.arange(self.num_neurons, dtype=np.int32)
         self.active_flag[:] = 1
         self.nactive[0] = self.num_neurons
+
+    def seed(self, seed: int | None):
+        """Seed the background-noise generator for reproducible runs."""
+        self._rng = np.random.default_rng(seed)
 
     def reset_state(self):
         """Reset neural potentials, conductances, and queues to baseline."""
@@ -159,6 +170,13 @@ class ConnectomeEngine:
         steps = int(round(duration_ms / self.config.dt))
         self.counts.fill(0)
         np.copyto(self.drive, drive)
+        if self.noise_sigma > 0.0:
+            # One sample per neuron per step. The membrane time constant is 20 ms
+            # against a 100 ms step, so this acts as a sustained current offset
+            # rather than averaging itself away the way per-tick noise would.
+            self.drive += self._rng.normal(
+                0.0, self.noise_sigma, self.num_neurons
+            ).astype(np.float32)
 
         self.cursor = advance_lif(
             self.ptr,
@@ -173,6 +191,7 @@ class ConnectomeEngine:
             self.cursor,
             steps,
             self.config.dt,
+            self.config.syn_gain,
             self.config.v_rest,
             self.config.v_threshold,
             self.config.v_reset,

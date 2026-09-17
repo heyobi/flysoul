@@ -299,9 +299,13 @@ INDEX_HTML = """<!DOCTYPE html>
 
           const lbl = data.labels[i] || '';
           let c = new THREE.Color(0x00f0ff); // default retina cyan
-          if (lbl.includes('Compass') || lbl.includes('Central')) c = new THREE.Color(0xb300ff);
+          // Inhibitory populations are drawn cold so the excitation/inhibition balance
+          // of the sign-constrained circuit is visible at a glance.
+          if (lbl.includes('Inhibitory') || lbl.includes('APL')) c = new THREE.Color(0x2b6cff);
+          else if (lbl.includes('Compass') || lbl.includes('Central')) c = new THREE.Color(0xb300ff);
           else if (lbl.includes('Kenyon') || lbl.includes('MBON')) c = new THREE.Color(0xffaa00);
           else if (lbl.includes('Dopamine') || lbl.includes('Nociceptor')) c = new THREE.Color(0xff0055);
+          else if (lbl.includes('Proprioceptor')) c = new THREE.Color(0xff8adf);
           else if (lbl.includes('Motor')) c = new THREE.Color(0x00ff66);
 
           colors[i * 3 + 0] = c.r;

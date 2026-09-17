@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-from typing import Dict, Any
+from typing import Dict
 
 from rich.console import Console
 from rich.layout import Layout
 from rich.panel import Panel
-from rich.progress import ProgressBar
 from rich.table import Table
 from rich.text import Text
 from rich.live import Live
@@ -102,9 +100,12 @@ class FlySoulDashboard:
 
         # Motor Firing Rates
         neural_table.add_row(Text("Descending Neuron (DN) Firing Pools:", style="bold white"))
+        winner = max(motor_rates, key=motor_rates.get) if motor_rates else None
         for pool, rate in motor_rates.items():
-            rate_bar = "▓" * min(15, int(rate * 3))
-            neural_table.add_row(Text(f"  {pool:<12}: {rate:>4.1f} Hz {rate_bar}", style="cyan"))
+            # Rates are genuine Hz now, so scale the bar to a plausible 75 Hz ceiling.
+            rate_bar = "▓" * min(15, int(rate / 5.0))
+            style = "bold green" if pool == winner else "cyan"
+            neural_table.add_row(Text(f"  {pool:<13}: {rate:>5.1f} Hz {rate_bar}", style=style))
 
         neural_panel = Panel(neural_table, title="[bold cyan]Connectome Telemetry[/bold cyan]", border_style="cyan")
         layout["neural"].update(neural_panel)
