@@ -259,11 +259,12 @@ def _cache_key(circuit: CircuitConfig, bio: BioPhysicsConfig, seed: int, wiring:
             "v_gap": bio.v_threshold - bio.v_rest,
             "tau_m": bio.tau_m,
             "tau_s": bio.tau_s,
+            "adaptation": [bio.adaptation_jump_mv, bio.adaptation_tau_ms],
             "seed": seed,
             "rate_targets_hz": DEFAULT_RATE_TARGETS_HZ,
             "step_ms": 100.0,
             "kc_sparsity": DEFAULT_KC_SPARSITY,
-            "version": 5,
+            "version": 6,
         },
         sort_keys=True,
     )

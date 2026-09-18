@@ -33,6 +33,21 @@ class BioPhysicsConfig:
     # heavy hit into chip damage. The intuition that noise buys exploration does not
     # survive contact with a reward function that has no cost for doing nothing.
     noise_sigma_frac: float = 0.0
+    # Spike-frequency adaptation: each spike raises the cell's threshold by this much
+    # and the increase decays with the time constant below. A documented property of
+    # fly neurons, and in the flybench comparison of whole-brain LIF models the single
+    # change that most improved behaviour (0.53 -> 0.68 on the hard tasks): cells stop
+    # saturating, the brain returns to rest after a stimulus, and descending pools
+    # recruit selectively instead of en masse. Zero disables it.
+    #
+    # Off by default here, measured: on this calibrated sub-circuit the flybench value of
+    # 2 mV stops the homeostatic calibration converging, and even 0.5 mV silences the
+    # approach-brake population (10 Hz -> 1 Hz) while the rest still converges. The
+    # threshold gap is 7 mV, so a 2 mV jump is a 30% change per spike; the whole-brain
+    # models it helped run at a different drive scale. Turning it on needs the
+    # calibration targets revisited first, not a flag flip.
+    adaptation_jump_mv: float = 0.0
+    adaptation_tau_ms: float = 200.0
 
     @property
     def a_v(self) -> float:
@@ -92,7 +107,20 @@ class CircuitConfig:
 
     # Synaptic plasticity
     learning_rate: float = 0.08  # Dopamine-gated STDP rate
-    eligibility_decay: float = 0.92  # Per-step decay of the synaptic eligibility trace
+    # Per-step decay of the synaptic eligibility trace (steps are 100 ms). This is the
+    # window over which a KC->MBON synapse can still be blamed or thanked for what just
+    # happened, and it sets how sharply timing can be learned. At 0.92 (~1.2 s) a hit
+    # taken at 1.0 s into the boss's swing still credited the Kenyon cells active at
+    # 0.3 s with 56% of the punishment, so an early roll and a well-timed one were
+    # depressed almost alike; measured live over 365 rolls, the early ones stayed at
+    # 74-83% failure and never improved although the KC code separates the phases
+    # (scripts/kc_phase_code.py). Shortening it to 0.80 did not help either, because the
+    # real smear was elsewhere: the trace was accumulating on every compartment every
+    # step, so the blame for an early roll landed on whichever cells fired later. With
+    # the tag now set only at the moment a command is issued (see
+    # DopaminePlasticity.update_traces), a longer trace no longer blurs phases; it
+    # just lets an outcome six steps later still find the tag (0.92**6 = 0.61).
+    eligibility_decay: float = 0.92
     reward_window_steps: int = 12  # Steps an efference copy stays credit-eligible
     aversive_pulse_ms: float = 200.0  # PPL1 burst duration on damage
     reward_pulse_ms: float = 200.0  # PAM burst duration on boss hit

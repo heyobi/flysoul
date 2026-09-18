@@ -94,6 +94,30 @@ def test_a_night_fits_its_budget_of_replayed_steps(topology):
     assert sum(len(sleep.memory[i]) for i in order) <= 100
 
 
+def test_archive_round_trips_through_npz(topology, tmp_path):
+    """What is written for offline experiments must be what was lived."""
+    sleep = SleepConsolidation(memory_episodes=2, archive_episodes=5)
+    for i in range(3):
+        sleep.begin_episode()
+        for j in range(5):
+            spikes = np.zeros(topology.num_neurons, dtype=np.int32)
+            spikes[topology.kenyon_indices[j]] = 1 + i
+            sleep.record(spikes, "roll" if j == 2 else "advance", 0.1 * j, terminal=(j == 4),
+                         anim_t=0.2 * j, attacking=(j % 2 == 0), damage_taken=0.05 * i, hit=float(j == 3))
+        sleep.end_episode()
+    assert len(sleep.memory) == 2 and len(sleep.archive) == 3
+    path = tmp_path / "archive.npz"
+    assert sleep.dump(path) == 15
+    z = np.load(path)
+    assert z["spikes"].shape == (15, topology.num_neurons)
+    assert list(z["channels"]) == list(ACTION_CHANNELS)
+    assert z["channel"][2] == ACTION_CHANNELS.index("roll")
+    assert z["fight"].tolist() == [0] * 5 + [1] * 5 + [2] * 5
+    assert z["terminal"].sum() == 3
+    assert np.isclose(z["anim_t"][3], 0.6) and z["attacking"][2] and z["hit"][3] == 1.0
+    assert z["spikes"][14, topology.kenyon_indices[4]] == 3
+
+
 def test_on_step_sees_every_replayed_transition(topology):
     plasticity = DopaminePlasticity(topology)
     sleep = SleepConsolidation(passes=3)

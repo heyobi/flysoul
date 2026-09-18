@@ -68,6 +68,58 @@ SHORT_CHANNEL = {
 }
 
 
+class DodgeTiming:
+    """When does the fly roll, relative to the boss's attack, and does it work?
+
+    The credit-delay readout says a roll is followed by a hit taken a median of six
+    steps later: the fly rolls, but not when it matters. This records, for every roll,
+    whether the boss was mid-attack, how far into the attack animation, and whether
+    damage arrived within the next few steps anyway. It is a measurement of the
+    sensory-to-motor timing, not a rule about when to roll.
+    """
+
+    WINDOW = 3  # steps after a roll within which a hit taken counts against it
+    BUCKETS = ((0.0, 0.3), (0.3, 0.6), (0.6, 1.0), (1.0, 9.9))
+
+    def __init__(self):
+        self.rolls: list[dict] = []
+        self._pending: list[dict] = []
+
+    def step(self, channel: str, boss_attacking: bool, boss_anim_time: float,
+             damage_taken: float) -> None:
+        for r in self._pending:
+            r["age"] += 1
+            if damage_taken > 1e-6 and r["hit_after"] is None:
+                r["hit_after"] = r["age"]
+        self._pending = [r for r in self._pending if r["age"] < self.WINDOW]
+        if channel == "roll":
+            r = {"attacking": bool(boss_attacking), "anim_t": float(boss_anim_time),
+                 "hit_after": None, "age": 0}
+            self.rolls.append(r)
+            self._pending.append(r)
+
+    def summary(self) -> str:
+        n = len(self.rolls)
+        if n < 10:
+            return f"dodge timing: {n} rolls so far, not enough to read"
+        during = [r for r in self.rolls if r["attacking"]]
+        idle = [r for r in self.rolls if not r["attacking"]]
+        hit = lambda rs: (sum(r["hit_after"] is not None for r in rs) / len(rs)) if rs else float("nan")
+        parts = [
+            f"dodge timing over {n} rolls: {len(during) / n:.0%} during a boss attack "
+            f"(hit within {self.WINDOW} steps anyway: {hit(during):.0%}), "
+            f"{len(idle) / n:.0%} while the boss was not attacking (hit: {hit(idle):.0%})",
+        ]
+        rows = []
+        for lo, hi in self.BUCKETS:
+            rs = [r for r in during if lo <= r["anim_t"] < hi]
+            if rs:
+                rows.append(f"{lo:.1f}-{hi:.1f}s: n={len(rs)} hit {hit(rs):.0%}")
+        if rows:
+            parts.append("by animation time at the roll: " + "; ".join(rows))
+        return "[dim]" + " | ".join(parts) + "[/dim]"
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="FlySoul: MaleCNS Fruit Fly Connectome plays Dark Souls III."
@@ -83,6 +135,12 @@ def parse_args():
                         help="Disable interactive terminal dashboard and use standard console output.")
     parser.add_argument("--explore", action="store_true",
                         help="Enable Boltzmann exploratory sampling over the descending pools.")
+    parser.add_argument("--explore-temperature", type=float, default=4.0,
+                        help="Boltzmann temperature in Hz for --explore. Measured on the "
+                             "calibrated circuit, the winning pool leads the runner-up by "
+                             "about 3 Hz, so at 4.0 only 55-58%% of decisions are the "
+                             "circuit's own winner and the rest are noise; the SoulsGym "
+                             "reference agent explored 10%% of the time. 1.5 gives ~85%%.")
     parser.add_argument("--no-web", action="store_true",
                         help="Disable the real-time 3D WebGL fruit fly brain visualizer.")
     parser.add_argument("--port", type=int, default=8080,
@@ -203,7 +261,7 @@ def build_agent(args, console):
 
     engine = ConnectomeEngine(topology.ptr, topology.post, topology.weight, biophys_cfg)
     encoder = SensoryEncoder(topology, biophys_cfg)
-    decoder = MotorDecoder(topology, step_ms=100.0)
+    decoder = MotorDecoder(topology, step_ms=100.0, temperature=args.explore_temperature)
     plasticity = DopaminePlasticity(
         topology,
         learning_rate=circuit_cfg.learning_rate,
@@ -292,6 +350,7 @@ def main():
     episode_history = []
     global_action_counts: dict[str, int] = {}
     pending_sleep = None
+    dodge = DodgeTiming()
 
     try:
         for ep in range(1, total_episodes + 1):
@@ -303,7 +362,7 @@ def main():
                 report_camera_alignment(env, console, ep)
             if pending_sleep is not None:
                 # The night ends when the arena is ready; normally it ended long before.
-                finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web)
+                finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web, sleep)
                 pending_sleep = None
             engine.reset_state()
             encoder.reset()
@@ -328,8 +387,11 @@ def main():
                 episode_history=episode_history,
                 global_action_counts=global_action_counts,
                 sleep=sleep,
+                dodge=dodge,
             )
             episode_history.append(summary)
+            if ep % 20 == 0:
+                console.print(dodge.summary())
             if summary["victory"]:
                 victories += 1
             if sleep is not None:
@@ -377,7 +439,7 @@ def main():
             pass
 
     if pending_sleep is not None:
-        finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web)
+        finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web, sleep)
     episodes_run = max(1, len(episode_history))
     console.print(
         f"\n[bold cyan]Simulation Finished.[/bold cyan] "
@@ -433,7 +495,7 @@ def start_sleep(sleep, plasticity, enable_web, mock_mode, ep):
     return thread, holder, ep
 
 
-def finish_sleep(pending, console, plasticity, memory_path, args, enable_web):
+def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sleep_obj=None):
     """Wait for the night to end, report it, and save what was consolidated."""
     thread, holder, ep = pending
     thread.join()
@@ -444,6 +506,31 @@ def finish_sleep(pending, console, plasticity, memory_path, args, enable_web):
             f"remembered steps from {report.episodes_in_memory} fights in "
             f"{report.duration_s:.1f}s; plastic weights moved {report.weight_shift:.1%}[/dim]"
         )
+        # Every tenth night, archive the fights for offline experiments and print
+        # what they say the credit horizon should be.
+        if ep % 10 == 0 and sleep_obj is not None:
+            try:
+                written = sleep_obj.dump(CHECKPOINT_DIR / "replay_archive.npz")
+                if written:
+                    console.print(f"[dim]archived {written} steps from "
+                                  f"{len(sleep_obj.archive)} fights for offline replay[/dim]")
+            except Exception as exc:  # never let bookkeeping stop the fight
+                console.print(f"[yellow]archive failed: {exc}[/yellow]")
+        if ep % 10 == 0:
+            delays = sleep_obj.credit_delays() if sleep_obj is not None else {}
+            if delays:
+                parts = []
+                for ch in ("advance", "attack_light", "attack_heavy", "parry", "roll", "retreat"):
+                    d = delays.get(ch)
+                    if d:
+                        parts.append(
+                            f"{ch}: +{d['reward']:.0f}/-{d['punish']:.0f} steps "
+                            f"(n={d['n_reward']}/{d['n_punish']})"
+                        )
+                console.print(
+                    "[dim]credit delays, action -> reward/punish (median steps): "
+                    + "; ".join(parts) + "[/dim]"
+                )
         if enable_web:
             broadcast_event({
                 "type": "sleep", "phase": "end", "episode": ep, "passes": report.passes,
@@ -665,7 +752,7 @@ def reset_episode(env, console, use_mock):
 
 def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, topology,
                 obs, info, args, console, dashboard, enable_web, episode_history,
-                global_action_counts, sleep=None):
+                global_action_counts, sleep=None, dodge=None):
     """Run one fight. Returns the episode summary."""
     ep_reward = 0.0
     hits = 0
@@ -717,13 +804,18 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                 channel, motor_rates, mock=mock_mode, lock_on=state.lock_on
             )
             prev_boss_hp = state.boss_hp
+            prev_player_hp = state.player_hp
             prev_distance = state.distance
+            pre_attacking, pre_anim_t = state.boss_attacking, state.boss_anim_time
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
             state = parse_obs(obs, info)
             boss_damage = max(0.0, prev_boss_hp - state.boss_hp)
             if boss_damage > 1e-6:
                 hits += 1
+            if dodge is not None:
+                dodge.step(channel, pre_attacking, pre_anim_t,
+                           max(0.0, prev_player_hp - state.player_hp))
 
             # The signal the fly learns from is not always the signal the environment
             # reports. SoulsGym scores a landed hit at about +0.05 and a hit taken at
@@ -763,7 +855,10 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                 )
                 if sleep is not None:
                     sleep.record(spike_counts, channel, learning_reward,
-                                 bool(terminated or truncated))
+                                 bool(terminated or truncated),
+                                 anim_t=pre_anim_t, attacking=pre_attacking,
+                                 damage_taken=max(0.0, prev_player_hp - state.player_hp),
+                                 hit=boss_damage)
 
             global_action_counts[channel] = global_action_counts.get(channel, 0) + 1
             episode_actions[channel] = episode_actions.get(channel, 0) + 1

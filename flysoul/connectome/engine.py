@@ -21,6 +21,7 @@ def advance_lif(
     v: np.ndarray,
     g: np.ndarray,
     refractory: np.ndarray,
+    adapt: np.ndarray,
     drive: np.ndarray,
     queue: np.ndarray,
     queue_count: np.ndarray,
@@ -33,6 +34,8 @@ def advance_lif(
     v_reset: float,
     refractory_ticks: int,
     delay_ticks: int,
+    adapt_jump: float,
+    adapt_decay: float,
     counts: np.ndarray,
     active: np.ndarray,
     active_flag: np.ndarray,
@@ -55,8 +58,12 @@ def advance_lif(
             if refractory[i] == 0:
                 v[i] = v_rest + (v[i] - v_rest) * av + drive[i] * (1.0 - av) + g[i] * coupling
                 g[i] *= ag
-                if v[i] > v_thresh:
+                # Spike-frequency adaptation: the threshold a cell has to reach
+                # climbs with every spike it fires and relaxes back over ~200 ms.
+                adapt[i] *= adapt_decay
+                if v[i] > v_thresh + adapt[i]:
                     counts[i] += 1
+                    adapt[i] += adapt_jump
                     # Schedule spike delivery at t + delay_ticks
                     future = (cursor + delay_ticks) % delay_slots
                     queue[future, queue_count[future]] = i
@@ -111,6 +118,7 @@ class ConnectomeEngine:
         self.v = np.full(self.num_neurons, self.config.v_rest, dtype=np.float32)
         self.g = np.zeros(self.num_neurons, dtype=np.float32)
         self.refractory = np.zeros(self.num_neurons, dtype=np.int32)
+        self.adapt = np.zeros(self.num_neurons, dtype=np.float32)
         self.drive = np.zeros(self.num_neurons, dtype=np.float32)
         self.counts = np.zeros(self.num_neurons, dtype=np.int32)
 
@@ -150,6 +158,7 @@ class ConnectomeEngine:
         self.v.fill(self.config.v_rest)
         self.g.fill(0.0)
         self.refractory.fill(0)
+        self.adapt.fill(0.0)
         self.drive.fill(0.0)
         self.counts.fill(0)
         self.queue.fill(0)
@@ -185,6 +194,7 @@ class ConnectomeEngine:
             self.v,
             self.g,
             self.refractory,
+            self.adapt,
             self.drive,
             self.queue,
             self.queue_count,
@@ -197,6 +207,8 @@ class ConnectomeEngine:
             self.config.v_reset,
             self.config.refractory_steps,
             self.config.delay_steps,
+            float(self.config.adaptation_jump_mv),
+            float(math.exp(-self.config.dt / max(1e-3, self.config.adaptation_tau_ms))),
             self.counts,
             self.active,
             self.active_flag,

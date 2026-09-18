@@ -32,7 +32,13 @@ class DopaminePlasticity:
         w_min_factor: float = 0.05,
         w_max_factor: float = 4.0,
         eligibility_decay: float = 0.92,
-        credit_decay: float = 0.82,
+        # How long an executed action stays responsible for what follows. At 0.82 an
+        # action four steps back kept 45% of the credit; measured live over 135 fights
+        # that left "advance" at -71% of its innate weight while attacks rose to +148%:
+        # closing the distance is what precedes both the hits and the damage, and the
+        # damage arrives sooner. At 0.90 the same action keeps 66%, so the approach
+        # that set up a hit shares in it.
+        credit_decay: float = 0.90,
         scaling_deadband: float = 0.15,
         scaling_rate: float = 0.02,
         rpe_scale: float = 0.0,
@@ -87,6 +93,10 @@ class DopaminePlasticity:
         self._channel_edges = [
             self.edges[self.channel == c] for c in range(self.num_channels)
         ]
+        # Positions within the plastic arrays, for tagging one compartment at a time.
+        self._channel_edge_positions = [
+            np.flatnonzero(self.channel == c) for c in range(self.num_channels)
+        ]
         self._baseline = np.array(
             [
                 float(np.sum(topology.weight[sel])) if len(sel) else 0.0
@@ -110,17 +120,33 @@ class DopaminePlasticity:
     # ------------------------------------------------------------------ traces
 
     def update_traces(self, spike_counts: np.ndarray, executed_channel: str | None = None):
-        """Accumulate pre/post coincidence and register the efference copy."""
+        """Set the synaptic tag on the compartment whose command was just issued.
+
+        The tag is set at the moment of the decision, on the synapses from the Kenyon
+        cells active *then*, and only in the compartment that was executed. It used to
+        accumulate on every compartment every step. Measured live, that misassigned
+        blame in exactly the way that blocks timing from being learned: the fly rolls
+        early in the boss's swing, is locked in the roll animation for half a second,
+        and is hit at the end of the swing; when the punishment arrives, the freshest
+        eligibility in the roll compartment belongs to the cells active during the
+        swing's late phase - the "roll now" cells - and they are depressed for a roll
+        that was chosen too early. Over 1,400 rolls the early ones never got rarer.
+
+        Tagging at decision time is also what the biology describes: the KC->MBON
+        eligibility that dopamine later reads is created by the coincidence at the
+        time of the event, not by whatever the Kenyon cells do afterwards.
+        """
         if len(self.edges) == 0:
             return
         self.eligibility *= self.eligibility_decay
-        pre_spikes = spike_counts[self.pre].astype(np.float32)
-        post_spikes = spike_counts[self.post].astype(np.float32)
-        np.add(self.eligibility, pre_spikes * (post_spikes + 0.1), out=self.eligibility)
-
         self.credit *= self.credit_decay
         if executed_channel is not None and executed_channel in ACTION_CHANNELS:
-            self.credit[ACTION_CHANNELS.index(executed_channel)] = 1.0
+            k = ACTION_CHANNELS.index(executed_channel)
+            self.credit[k] = 1.0
+            sel = self._channel_edge_positions[k]
+            pre_spikes = spike_counts[self.pre[sel]].astype(np.float32)
+            post_spikes = spike_counts[self.post[sel]].astype(np.float32)
+            self.eligibility[sel] += pre_spikes * (post_spikes + 0.1)
 
     # ----------------------------------------------------------- reinforcement
 

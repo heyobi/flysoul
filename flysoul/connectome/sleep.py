@@ -35,6 +35,12 @@ class Transition:
     channel: Optional[str]  # descending channel that was executed
     reward: float  # the learning signal that followed
     terminal: bool
+    # Context for offline analysis: what the boss was doing when the decision was
+    # made, and what the step cost or earned. Not used by replay itself.
+    anim_t: float = 0.0
+    attacking: bool = False
+    damage_taken: float = 0.0
+    hit: float = 0.0
 
 
 @dataclass
@@ -58,8 +64,13 @@ class SleepConsolidation:
         seed: int = 0,
         min_transitions: int = 4,
         max_transitions: int = 4000,
+        archive_episodes: int = 400,
     ):
         self.memory_episodes = int(memory_episodes)
+        # A longer record than sleep needs, kept for offline experiments: a candidate
+        # learning rule can be run over real fights before it is trusted live.
+        self.archive_episodes = int(archive_episodes)
+        self.archive: List[List[Transition]] = []
         self.passes = int(passes)
         # A night has to fit inside the game's loading screen. As the fly survives
         # longer the fights get longer, so the number of passes bends to a budget of
@@ -81,21 +92,108 @@ class SleepConsolidation:
         self._current = []
 
     def record(self, spike_counts: np.ndarray, channel: Optional[str], reward: float,
-               terminal: bool) -> None:
+               terminal: bool, anim_t: float = 0.0, attacking: bool = False,
+               damage_taken: float = 0.0, hit: float = 0.0) -> None:
         spikes = np.clip(np.asarray(spike_counts), 0, 255).astype(np.uint8)
-        self._current.append(Transition(spikes, channel, float(reward), bool(terminal)))
+        self._current.append(Transition(
+            spikes, channel, float(reward), bool(terminal),
+            float(anim_t), bool(attacking), float(damage_taken), float(hit),
+        ))
 
     def end_episode(self) -> int:
         """File the fight just fought. Returns how many fights are in memory."""
         if len(self._current) >= self.min_transitions:
             self.memory.append(self._current)
             del self.memory[: max(0, len(self.memory) - self.memory_episodes)]
+            self.archive.append(self._current)
+            del self.archive[: max(0, len(self.archive) - self.archive_episodes)]
         self._current = []
         return len(self.memory)
+
+    # ------------------------------------------------------------------ archive
+
+    def dump(self, path) -> int:
+        """Write the archive to an .npz for offline experiments. Returns transitions written."""
+        from flysoul.connectome.graph import ACTION_CHANNELS
+        fights = self.archive
+        n = sum(len(f) for f in fights)
+        if n == 0:
+            return 0
+        width = len(fights[0][0].spikes)
+        spikes = np.zeros((n, width), dtype=np.uint8)
+        channel = np.full(n, -1, dtype=np.int8)
+        reward = np.zeros(n, dtype=np.float32)
+        terminal = np.zeros(n, dtype=bool)
+        anim_t = np.zeros(n, dtype=np.float32)
+        attacking = np.zeros(n, dtype=bool)
+        damage = np.zeros(n, dtype=np.float32)
+        hit = np.zeros(n, dtype=np.float32)
+        fight = np.zeros(n, dtype=np.int32)
+        i = 0
+        for f_id, f in enumerate(fights):
+            for tr in f:
+                spikes[i] = tr.spikes
+                channel[i] = ACTION_CHANNELS.index(tr.channel) if tr.channel in ACTION_CHANNELS else -1
+                reward[i] = tr.reward
+                terminal[i] = tr.terminal
+                anim_t[i] = tr.anim_t
+                attacking[i] = tr.attacking
+                damage[i] = tr.damage_taken
+                hit[i] = tr.hit
+                fight[i] = f_id
+                i += 1
+        np.savez_compressed(
+            path, spikes=spikes, channel=channel, reward=reward, terminal=terminal,
+            anim_t=anim_t, attacking=attacking, damage_taken=damage, hit=hit, fight=fight,
+            channels=np.array(ACTION_CHANNELS),
+        )
+        return n
 
     @property
     def transitions_in_memory(self) -> int:
         return sum(len(ep) for ep in self.memory)
+
+    # ------------------------------------------------------------ measurement
+
+    def credit_delays(self, min_samples: int = 5) -> dict:
+        """How many steps separate an action from the reinforcement that follows it.
+
+        The credit trace's decay is a claim about this number: the executed channel is
+        held responsible for what happens over the next few steps, and how fast that
+        responsibility fades should match how long the consequences actually take to
+        arrive. Guessing it moved the fly from attacker to turtle in forty fights. This
+        reads the answer off the remembered fights instead: for every rewarded and every
+        punished step, the distance back to the last execution of each channel.
+
+        Returns {channel: {"reward": median, "punish": median, "n_reward": .., "n_punish": ..,
+        "decay_for_half_credit": 0.5 ** (1 / median reward delay)}} for channels with
+        enough samples.
+        """
+        reward_d: dict = {}
+        punish_d: dict = {}
+        for fight in self.memory:
+            last: dict = {}
+            for i, tr in enumerate(fight):
+                if tr.channel is not None:
+                    last[tr.channel] = i
+                if tr.reward > 1e-3:
+                    for ch, j in last.items():
+                        reward_d.setdefault(ch, []).append(i - j)
+                elif tr.reward < -1e-3:
+                    for ch, j in last.items():
+                        punish_d.setdefault(ch, []).append(i - j)
+        out = {}
+        for ch in set(reward_d) | set(punish_d):
+            r, p = reward_d.get(ch, []), punish_d.get(ch, [])
+            if len(r) < min_samples and len(p) < min_samples:
+                continue
+            med_r = float(np.median(r)) if r else float("nan")
+            med_p = float(np.median(p)) if p else float("nan")
+            out[ch] = {
+                "reward": med_r, "punish": med_p, "n_reward": len(r), "n_punish": len(p),
+                "decay_for_half_credit": (0.5 ** (1.0 / max(1.0, med_r))) if r else float("nan"),
+            }
+        return out
 
     # ----------------------------------------------------------------- asleep
 

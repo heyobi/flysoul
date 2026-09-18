@@ -187,6 +187,71 @@ FlySoul includes a terminal user interface powered by `rich`:
 
 ---
 
+## 📈 Results so far, honestly (as of 2026-09-18)
+
+Everything below is from the live game (SoulsGym, Iudex Gundyr, ~2.3 episodes per
+minute including the death reload). All learning happens inside the circuit: KC→MBON
+three-factor plasticity with a temporal-difference dopamine signal, replay of remembered
+fights during the loading screen ("sleep"), and uniform homeostatic scaling. There is no
+trained readout and no scripted policy; `scripts/ablation.py` is the check.
+
+**The fly has beaten the boss twice** in roughly a thousand live episodes:
+
+| when | run configuration | episode | fly HP left | steps |
+|---|---|---|---|---|
+| 2026-09-17 23:26 | `--aggression 8`, sleep, uniform homeostasis | 16 | 13% | 82 |
+| 2026-09-18 03:10 | + `--impatience 0.02`, credit decay 0.90 | 283 | 6% | 74 |
+
+That is a win rate on the order of 1 in 300. The average fight ends with the boss at
+71–78% health and the fly dead after ~23 decisions; it has not moved in 500 episodes of
+the last configuration. For scale, the SoulsGym author's reference agent (dueling double
+DQN, replay buffer, 3x game speed, several machines) reached a 45% win rate after about
+five million environment samples; this run has seen about twelve thousand.
+
+**What the learned synapses say** (KC→MBON weight per compartment, relative to the
+innate circuit, after 511 episodes): attack light +115%, attack heavy +32%, parry +11%,
+roll −4%, advance −46%, retreat −51%, strafes −27%. Compared with the first victory the
+fly has stopped fleeing (retreat was +98%), recovered rolling (was −76%) and is slowly
+recovering approach (was −75%). The critic's value estimates span −0.6 to +0.9.
+
+**What the fights say.** Sleep memory is also used to measure how far each action sits
+from the reinforcement that follows it. Approaching precedes a landed hit by a median of
+4–6 steps and precedes a hit taken by 2–7 steps: no credit-trace decay can separate the
+two. Over the night the ratio of punishments to rewards fell from about 6:1 to 3:1. The
+bottleneck is defence — the fly gets hit several times per hit it lands — not offence.
+
+**Lesion controls** (`scripts/ablation.py`, mock arena, innate circuit, 10 episodes each):
+
+| condition | hits/ep | boss HP | idle | action mix |
+|---|---|---|---|---|
+| intact | 2.7 | 86% | 0% | advance 39, retreat 24, attack light 15 |
+| MBON output cut | 3.3 | 72% | 42% | advance 43, idle 42 |
+| descending pools deafened | 0.0 | 100% | 100% | idle 100 |
+| sensory afferents cut | 0.0 | 100% | 100% | idle 100 |
+| weights shuffled | 3.1 | 71% | 0% | strafe right 55, advance 23 |
+
+The behaviour depends on the circuit: without a path from brain to motor output, or
+without sensory input, the fly does nothing, and shuffling the wiring produces a
+different animal. This demonstrates dependence on the circuit, **not** that the
+biological wiring is better at the game — the shuffled circuit scores higher here.
+
+**Things that did not work, and what they cost to find out.**
+- Three bugs masked everything for the first ~400 episodes: the player heading convention
+  was 146° off (the retina saw the boss in the wrong place), the patched camera reset
+  rotated the character's body instead of the camera, and a per-compartment homeostatic
+  cap pinned five of eight compartments at exactly +53% so no experience could change
+  behaviour. Any result measured before those fixes is void, including this project's
+  earlier "reward shaping does not help" conclusions.
+- Reweighting damage dealt (`--aggression 8`) alone: no effect while the cap bug was
+  live; after the fix it produced the first victory within 16 episodes.
+- Sleep replay alone (with the cap bug live): worse. More updates pressed harder against
+  the same wall.
+- Lengthening the credit trace (0.82 → 0.90) turned the fly into a parry turtle within 40
+  fights; measuring the action-to-outcome delays afterwards showed why it could not help.
+- Spike-frequency adaptation, the single change that most improved flybench's whole-brain
+  LIF models, stops this sub-circuit's calibration converging even at a quarter of the
+  published value. Implemented, tested, left off.
+
 ## 🧪 Testing
 
 Run the test suite:
