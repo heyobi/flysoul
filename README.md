@@ -235,6 +235,33 @@ without sensory input, the fly does nothing, and shuffling the wiring produces a
 different animal. This demonstrates dependence on the circuit, **not** that the
 biological wiring is better at the game — the shuffled circuit scores higher here.
 
+**Measuring before touching the live run (added 2026-09-18).** Every step the fly
+lives is archived (`checkpoints/runs/<run>/archive.npz`: spikes, action, reinforcement,
+boss animation and phase, distance, motor rates, critic values). Three tools use it:
+`scripts/offline_replay.py` replays a candidate plasticity rule over real fights;
+`scripts/offline_search.py` scores rule settings by whether, on held-out fights, they
+raised the drive of actions that worked and lowered it where they failed;
+`scripts/offline_ceiling.py` fits the same mapping by least squares - the ceiling no
+local rule can beat. On 300 fights the live rule scored ~0.00 on that measure, the
+ceiling +0.33, and a single change - the value horizon, γ 0.95 → 0.90 - reached +0.16
+on both splits while every other parameter made no consistent difference. The ceiling
+itself was then traced to the sensory code: which attack the boss is performing predicts
+the outcome of an action far better (+0.39) than the Kenyon cell code the mushroom body
+received (+0.26), because the telegraph bank tiled time since the swing began
+identically for all 25 attacks. Sixty-four attack-pattern cells (each animation drives a
+fixed sparse subset, the way a lobula columnar type answers one visual motion pattern)
+raise the simulated Kenyon cell ceiling to +0.38 (`scripts/kc_ceiling_sim.py`). They were
+switched on at 16:03 with learning restarted from the innate circuit; the results above
+predate them.
+
+**Throughput, measured rather than assumed.** SoulsGym resets by teleporting and
+rewriting health, not through the game's death reload: a reset is 1.6 s. The fight is
+~20 s of wall clock for ~25 decisions because the environment advances the game through
+animation-locked steps in game time, so `--game-speed` scales most of an episode. At 3x
+(the SoulsGym author's setting; the brain simulates a 100 ms step in ~33 ms) and with
+the between-fight replay paced to 2.5 s instead of 7, an episode takes 11.5 s instead of
+28 (`scripts/reset_timing.py`), about 300 episodes an hour.
+
 **Things that did not work, and what they cost to find out.**
 - Three bugs masked everything for the first ~400 episodes: the player heading convention
   was 146° off (the retina saw the boss in the wrong place), the patched camera reset

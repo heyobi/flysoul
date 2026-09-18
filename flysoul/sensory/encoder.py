@@ -44,6 +44,8 @@ class SensoryEncoder:
         self.loom_idx = sub.get("motion_looming", topology.motion_indices)
         self.telegraph_idx = sub.get("motion_telegraph", topology.motion_indices[:0])
         self.size_idx = sub.get("motion_size", topology.motion_indices[:0])
+        self.pattern_idx = sub.get("motion_pattern", topology.motion_indices[:0])
+        self._pattern_cache: dict = {}
         self.sp_low_idx = sub.get("proprio_stamina_low", topology.proprioceptor_indices[:0])
         self.sp_high_idx = sub.get("proprio_stamina_high", topology.proprioceptor_indices[:0])
         self.hp_low_idx = sub.get("proprio_health_low", topology.proprioceptor_indices[:0])
@@ -86,6 +88,17 @@ class SensoryEncoder:
         innately drives escape is suppressed for most of the fight.
         """
         self._last_command = channel if channel in _SELF_MOTION_CHANNELS else None
+
+    def _pattern_cells(self, anim_id: int) -> np.ndarray:
+        """The fixed subset of pattern cells that answers one attack animation."""
+        cells = self._pattern_cache.get(anim_id)
+        if cells is None:
+            n = len(self.pattern_idx)
+            k = max(1, n // 8)
+            pick = np.random.default_rng(100_003 + anim_id).choice(n, size=k, replace=False)
+            cells = self.pattern_idx[np.sort(pick)]
+            self._pattern_cache[anim_id] = cells
+        return cells
 
     def reset(self, initial_player_hp: float = 1.0, initial_distance: float = 8.0):
         self._last_command = None
@@ -163,6 +176,14 @@ class SensoryEncoder:
                 drive[self.telegraph_idx] += (
                     thr * 1.55 * np.exp(-0.5 * (dt / self._telegraph_sigma) ** 2)
                 ).astype(np.float32)
+
+        # 3a. Attack-pattern cells: which swing this is. Each animation the boss can
+        # perform drives a fixed, sparse subset of these cells for as long as it lasts,
+        # the way a lobula columnar type answers one visual motion pattern. Combined
+        # at random in the Kenyon cells with the telegraph bank, this yields a code for
+        # 'this attack, at this point' - without saying anything about what to do.
+        if len(self.pattern_idx) > 0 and state.boss_attacking and state.boss_anim_id >= 0:
+            drive[self._pattern_cells(int(state.boss_anim_id))] += np.float32(thr * 1.45)
 
         # 3b. Object-size cells: monotonic in how large the boss looks, which is the
         # signal that the approach has arrived. They are subthreshold at range and

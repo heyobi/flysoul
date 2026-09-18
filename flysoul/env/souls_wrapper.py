@@ -54,7 +54,8 @@ class LiveEnvUnavailable(RuntimeError):
 
 
 def make_souls_env(
-    use_mock: bool = False, skip_steps: bool = True, allow_fallback: bool = False
+    use_mock: bool = False, skip_steps: bool = True, allow_fallback: bool = False,
+    game_speed: float = 1.0,
 ) -> gym.Env:
     """Create either the live Dark Souls III SoulsGym environment or the mock simulator.
 
@@ -65,6 +66,9 @@ def make_souls_env(
             the agent a decision that the game then threw away.
         allow_fallback: Permit silently substituting the offline simulator when the live
             environment cannot be created. Off by default, and it should stay off.
+        game_speed: Speed multiplier the game runs at during a step. The brain costs
+            about a third of a game step to simulate, so up to 3x is feasible; SoulsGym's
+            author trained at 3x. Resets are not affected.
 
     Raises:
         LiveEnvUnavailable: the live game was requested but could not be initialised.
@@ -88,10 +92,10 @@ def make_souls_env(
 
         logger.info("Initializing Live SoulsGym Iudex Environment (DarkSoulsIII.exe hook)...")
         try:
-            env = gym.make("SoulsGymIudex-v0", skip_steps=skip_steps)
+            env = gym.make("SoulsGymIudex-v0", skip_steps=skip_steps, game_speed=game_speed)
         except TypeError:
-            # Older soulsgym releases do not accept skip_steps.
-            logger.warning("Installed soulsgym does not support skip_steps; continuing without it.")
+            # Older soulsgym releases do not accept these options.
+            logger.warning("Installed soulsgym does not support skip_steps/game_speed; continuing without them.")
             env = gym.make("SoulsGymIudex-v0")
         return ValidActionInfo(env)
 

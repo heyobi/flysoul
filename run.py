@@ -142,6 +142,18 @@ def parse_args():
                              "about 3 Hz, so at 4.0 only 55-58%% of decisions are the "
                              "circuit's own winner and the rest are noise; the SoulsGym "
                              "reference agent explored 10%% of the time. 1.5 gives ~85%%.")
+    parser.add_argument("--game-speed", type=float, default=1.0,
+                        help="Game speed multiplier during steps (SoulsGym game_speed). The "
+                             "brain simulates a 100 ms step in ~33 ms, so up to 3x keeps up. "
+                             "Fights are ~10%% of wall time, so this buys little on its own.")
+    parser.add_argument("--early-stop-hp", type=float, default=0.0,
+                        help="End the fight when the fly's HP falls to this fraction, before "
+                             "the killing blow, so the reset is a teleport instead of the "
+                             "game's death reload. Measured: 90%% of wall time is that reload; "
+                             "Iudex hits for a median 27%% HP and the fly dies from ~13%%, so "
+                             "0.35 avoids 99%% of deaths at the cost of about a third of the "
+                             "HP budget. The death penalty is applied as SoulsGym would. "
+                             "0 disables.")
     parser.add_argument("--no-web", action="store_true",
                         help="Disable the real-time 3D WebGL fruit fly brain visualizer.")
     parser.add_argument("--port", type=int, default=8080,
@@ -307,6 +319,13 @@ def main():
         )
         if not args.no_memory:
             restored = sleep.load_memory(CHECKPOINT_DIR / "sleep_memory.npz")
+            if restored and sleep.memory[0][0].spikes.shape[0] != topology.num_neurons:
+                # Remembered under a different wiring: the spike arrays do not line up
+                # with these neurons, so replaying them would teach the wrong synapses.
+                sleep.memory = []
+                console.print("[yellow]Sleep memory was recorded on a different circuit; "
+                              "starting with an empty memory.[/yellow]")
+                restored = 0
             if restored:
                 console.print(f"[green]OK Restored {restored} remembered fights[/green] "
                               "so the restart forgets nothing.")
@@ -325,7 +344,8 @@ def main():
 
     use_mock = not args.game
     try:
-        env = make_souls_env(use_mock=use_mock, allow_fallback=args.allow_mock_fallback)
+        env = make_souls_env(use_mock=use_mock, allow_fallback=args.allow_mock_fallback,
+                             game_speed=args.game_speed)
     except LiveEnvUnavailable as e:
         console.print(f"[bold red]{e}[/bold red]")
         console.print(
@@ -363,21 +383,34 @@ def main():
 
     try:
         for ep in range(1, total_episodes + 1):
+            # Where the time between fights goes, phase by phase. The fight itself is
+            # a tenth of the wall clock; the rest was a guess until this was measured.
+            phases: dict[str, float] = {}
+            t_mark = time.perf_counter()
             release_all_keys()
-            obs, info, env = reset_episode(env, console, use_mock)
+            obs, info, env = reset_episode(env, console, use_mock, args)
+            phases["env_reset"] = time.perf_counter() - t_mark; t_mark = time.perf_counter()
             if not use_mock and not ensure_lock_on(env, console):
                 console.print("[yellow]Starting the episode without lock-on.[/yellow]")
+            phases["lock_on"] = time.perf_counter() - t_mark; t_mark = time.perf_counter()
             if not use_mock:
                 report_camera_alignment(env, console, ep)
+            phases["camera_report"] = time.perf_counter() - t_mark; t_mark = time.perf_counter()
             if pending_sleep is not None:
                 # The night ends when the arena is ready; normally it ended long before.
                 finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web,
                              sleep, recorder)
                 pending_sleep = None
+            phases["sleep_wait_and_save"] = time.perf_counter() - t_mark; t_mark = time.perf_counter()
             engine.reset_state()
             encoder.reset()
             plasticity.reset()
             settle_connectome(engine, encoder, obs, info)
+            phases["settle"] = time.perf_counter() - t_mark
+            if ep > 1:
+                recorder.event("reset_timing", episode=ep, **{k: round(v, 2) for k, v in phases.items()})
+                if ep % 10 == 0:
+                    console.print("[dim]between fights: " + ", ".join(f"{k} {v:.1f}s" for k, v in phases.items()) + "[/dim]")
 
             summary, frames = run_episode(
                 ep=ep,
@@ -416,7 +449,8 @@ def main():
             if sleep is not None:
                 # Consolidate while the game reloads. That is dead time otherwise, and it
                 # is also when the fly's own brain does this.
-                pending_sleep = start_sleep(sleep, plasticity, enable_web, mock_mode, ep)
+                pending_sleep = start_sleep(sleep, plasticity, enable_web, mock_mode, ep,
+                                            fast_reset=args.early_stop_hp > 0.0)
             elif not args.no_memory:
                 plasticity.save(memory_path)
 
@@ -468,7 +502,7 @@ def main():
     )
 
 
-def start_sleep(sleep, plasticity, enable_web, mock_mode, ep):
+def start_sleep(sleep, plasticity, enable_web, mock_mode, ep, fast_reset=False):
     """Begin replaying remembered fights in the background; returns a handle for finish_sleep.
 
     The replay itself takes about a second of compute. When someone is watching it is
@@ -481,7 +515,11 @@ def start_sleep(sleep, plasticity, enable_web, mock_mode, ep):
         return None
     target = 0.0
     if enable_web:
-        target = 1.5 if mock_mode else 7.0
+        # A teleport reset is a few seconds, a death reload about twenty; do not let
+        # the viewer's pacing become the bottleneck.
+        # Measured: the teleport reset takes ~1.6 s, so a 7 s dream was the single
+        # largest cost between fights (6.2 s of waiting). 2.5 s still reads on screen.
+        target = 1.5 if mock_mode else 2.5
     total_hint = sum(len(sleep.memory[i]) for i in sleep.schedule()) or 1
     # Roughly 150 frames per night is plenty for the viewer and cheap for the browser.
     every = max(1, total_hint // 150)
@@ -760,7 +798,7 @@ def recover_game_window(env, console):
         pass
 
 
-def reset_episode(env, console, use_mock):
+def reset_episode(env, console, use_mock, args=None):
     """Reset the environment, rebuilding it if the live game refuses to come back."""
     for attempt in range(5):
         try:
@@ -777,7 +815,7 @@ def reset_episode(env, console, use_mock):
         env.close()
     except Exception:
         pass
-    env = make_souls_env(use_mock=use_mock)
+    env = make_souls_env(use_mock=use_mock, game_speed=getattr(args, 'game_speed', 1.0))
     obs, info = env.reset()
     return obs, info, env
 
@@ -847,6 +885,13 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
             boss_damage = max(0.0, prev_boss_hp - state.boss_hp)
             if boss_damage > 1e-6:
                 hits += 1
+            # Early stop: end the fight before the killing blow so the reset is a
+            # teleport rather than the game's death reload (see --early-stop-hp).
+            if (args.early_stop_hp > 0.0 and not mock_mode and not terminated
+                    and 0.0 < state.player_hp <= args.early_stop_hp):
+                terminated = True
+                reward -= 0.1  # SoulsGym's own death penalty, applied where death would be
+                ep_reward -= 0.1
             if dodge is not None:
                 dodge.step(channel, pre_attacking, pre_anim_t,
                            max(0.0, prev_player_hp - state.player_hp))

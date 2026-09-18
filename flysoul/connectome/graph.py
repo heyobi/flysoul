@@ -123,8 +123,10 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
     # Object-size cells: monotonic in retinal subtense, i.e. in how large the boss
     # looks. They are what tells the circuit the approach is finished.
     motion_size_idx = alloc(cfg.num_retina_motion - 2 * _mt)
+    # Attack-pattern cells (see CircuitConfig.num_retina_pattern); may be empty.
+    motion_pattern_idx = alloc(cfg.num_retina_pattern)
     motion_idx = np.concatenate(
-        [motion_loom_idx, motion_telegraph_idx, motion_size_idx]
+        [motion_loom_idx, motion_telegraph_idx, motion_size_idx, motion_pattern_idx]
     ).astype(np.int32)
     compass_idx = alloc(cfg.num_compass_neurons)
     ring_inh_idx = alloc(cfg.num_ring_inhibitory)
@@ -425,6 +427,7 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
             "motion_looming": motion_loom_idx,
             "motion_telegraph": motion_telegraph_idx,
             "motion_size": motion_size_idx,
+            "motion_pattern": motion_pattern_idx,
             "proprio_stamina_low": proprio_stamina_low_idx,
             "proprio_stamina_high": proprio_stamina_high_idx,
             "proprio_health_low": proprio_health_low_idx,

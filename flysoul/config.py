@@ -76,6 +76,15 @@ class CircuitConfig:
     # Sensory neuron counts
     num_retina_brightness: int = 128  # Proximal visual sector intensity
     num_retina_motion: int = 96  # Lobula cells: looming, attack telegraph, object size
+    # Motion-pattern cells: lobula columnar feature detectors, each tuned to one of the
+    # boss's attack animations (the way LC cell types each respond to a particular
+    # visual motion pattern). Measured offline on 300 fights, the outcome of an
+    # action is predicted far better by 'which attack, which phase' (+0.39) than by
+    # the Kenyon cell code the mushroom body actually received (+0.26), because the
+    # telegraph bank tiles time since the swing began identically for all 25 attacks.
+    # Zero keeps the wiring (and its learned weights) exactly as it was; 64 was turned on
+    # 2026-09-18 after the offline ceiling measurement, starting learning afresh.
+    num_retina_pattern: int = 64
     num_compass_neurons: int = 32  # Central complex heading/angle tuning (EPG)
     num_nociceptors: int = 16  # Pain / damage afferent neurons
     num_proprioceptors: int = 32  # Interoceptive afferents: stamina, action lock, own health
