@@ -15,6 +15,8 @@ import math
 import sys
 import threading
 import time
+from pathlib import Path
+
 import numpy as np
 
 # Ensure UTF-8 output on Windows consoles
@@ -195,11 +197,20 @@ def parse_args():
                         help="How many recent fights sleep can draw on. Offline, 50 lets the "
                              "weights accumulate across fights where 20 wanders (travel ratio "
                              "1.2 vs 0.65); the best-fights-only memory was tested and is harmful.")
+    parser.add_argument("--sleep-save-every", type=int, default=5,
+                        help="Write the remembered fights to disk every N episodes (and at exit).")
     parser.add_argument("--sleep-gain", type=float, default=0.5,
                         help="Learning-rate multiplier during replay, so a pass is a "
                              "consolidation rather than a full new lesson.")
     parser.add_argument("--no-sleep", action="store_true",
                         help="Do not replay fights between episodes.")
+    parser.add_argument("--hold-when-blocked", action="store_true",
+                        help="If the pool that won cannot be executed now (animation lock), hold still "
+                             "instead of executing the best executable pool. Live A/B from 2026-09-19.")
+    parser.add_argument("--probe-weights", default=None,
+                        help="DIAGNOSTIC: load KC->MBON synapses from this file (e.g. a least-squares "
+                             "fit from scripts/fit_probe_weights.py) and run with learning, sleep and "
+                             "saving off under the fingerprint 'probe'. Never a result.")
     parser.add_argument("--no-memory", action="store_true",
                         help="Do not load or save learned synapses; start from the innate circuit.")
     parser.add_argument("--skip-input-check", action="store_true",
@@ -282,7 +293,8 @@ def build_agent(args, console):
 
     engine = ConnectomeEngine(topology.ptr, topology.post, topology.weight, biophys_cfg)
     encoder = SensoryEncoder(topology, biophys_cfg)
-    decoder = MotorDecoder(topology, step_ms=100.0, temperature=args.explore_temperature)
+    decoder = MotorDecoder(topology, step_ms=100.0, temperature=args.explore_temperature,
+                           hold_when_blocked=args.hold_when_blocked)
     plasticity = DopaminePlasticity(
         topology,
         learning_rate=args.learning_rate if args.learning_rate else circuit_cfg.learning_rate,
@@ -291,7 +303,21 @@ def build_agent(args, console):
 
     # Learned synapses persist across runs, keyed by the wiring they were learned on.
     memory_path = CHECKPOINT_DIR / f"learned_{_topology_fingerprint(topology)}.npz"
-    if args.no_memory:
+    if args.probe_weights:
+        # Diagnostic probe: synapses fitted outside the brain (scripts/fit_probe_weights.py),
+        # run with learning, sleep and saving off, under its own fingerprint so the run
+        # records and the visualizer never mix it with the fly's own learning.
+        probe = Path(args.probe_weights)
+        if not plasticity.load(probe):
+            console.print(f"[bold red]probe weights {probe} do not fit this circuit; refusing.[/bold red]")
+            sys.exit(2)
+        memory_path = CHECKPOINT_DIR / "learned_probe.npz"
+        args.no_learning = True
+        args.no_sleep = True
+        args.no_memory = True
+        console.print(f"[bold magenta]DIAGNOSTIC PROBE[/bold magenta]: synapses from {probe.name}, "
+                      "learning/sleep/saving off; nothing here counts as a result.")
+    elif args.no_memory:
         console.print("[yellow]Starting from the innate circuit (--no-memory).[/yellow]")
     elif plasticity.load(memory_path):
         console.print(
@@ -513,7 +539,7 @@ def main():
 
     if pending_sleep is not None:
         finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web,
-                     sleep, recorder)
+                     sleep, recorder, final=True)
     episodes_run = max(1, len(episode_history))
     console.print(
         f"\n[bold cyan]Simulation Finished.[/bold cyan] "
@@ -574,7 +600,7 @@ def start_sleep(sleep, plasticity, enable_web, mock_mode, ep, fast_reset=False):
 
 
 def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sleep_obj=None,
-                 recorder=None):
+                 recorder=None, final=False):
     """Wait for the night to end, report it, and save what was consolidated."""
     thread, holder, ep = pending
     thread.join()
@@ -626,7 +652,12 @@ def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sl
             })
     if not args.no_memory:
         plasticity.save(memory_path)
-        if sleep_obj is not None:
+        # The remembered fights are a compressed npz of every step's spikes; with fifty
+        # fights in memory writing it took 8% of the wall clock (py-spy, 2026-09-18), so
+        # it is written every few fights and always at the end. A restart then forgets at
+        # most the last few fights' *replay*; the synapses they taught are saved above.
+        every = max(1, int(getattr(args, "sleep_save_every", 5)))
+        if sleep_obj is not None and (ep % every == 0 or final):
             try:
                 sleep_obj.save_memory(CHECKPOINT_DIR / "sleep_memory.npz")
             except Exception as exc:

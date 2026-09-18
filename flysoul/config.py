@@ -85,6 +85,31 @@ class CircuitConfig:
     # Zero keeps the wiring (and its learned weights) exactly as it was; 64 was turned on
     # 2026-09-18 after the offline ceiling measurement, starting learning afresh.
     num_retina_pattern: int = 64
+    # Conjunction pattern cells: instead of a hashed subset per animation, one small group
+    # of cells per (animation slot, phase bin), driven for any boss animation. Measured
+    # offline (980 fights): the outcome ceiling of the raw 'attack id x phase' feature is
+    # +0.45 against +0.39 for the Kenyon code built from hashed pattern cells, and that
+    # gap is the only sizeable information loss in the encoder. 0 keeps the hashed cells.
+    pattern_phase_bins: int = 0
+    # >0: exact layout, one group of this many cells per (slot, phase bin).
+    # 0: hashed layout - each (animation, phase bin) drives a fixed random eighth of the
+    #    num_retina_pattern cells, the same population code the hashed attack cells use.
+    pattern_cells_per_conjunction: int = 2
+    pattern_slots: int = 32  # boss animation ids seen live are 0..30
+    # Kenyon claws sample the pattern population as if it had this many cells, so a
+    # larger pattern bank does not crowd the retina and compass out of the calyx.
+    # 0 = plain uniform sampling (the live wiring).
+    pattern_pool_share: int = 0
+    # Conjunction code only while the boss is attacking (as the hashed cells do) or for
+    # every animation including idle and walking.
+    pattern_attacking_only: bool = True
+
+    @property
+    def pattern_cell_count(self) -> int:
+        if self.pattern_phase_bins > 0 and self.pattern_cells_per_conjunction > 0:
+            return self.pattern_slots * self.pattern_phase_bins * self.pattern_cells_per_conjunction
+        return self.num_retina_pattern
+
     num_compass_neurons: int = 32  # Central complex heading/angle tuning (EPG)
     num_nociceptors: int = 16  # Pain / damage afferent neurons
     num_proprioceptors: int = 32  # Interoceptive afferents: stamina, action lock, own health

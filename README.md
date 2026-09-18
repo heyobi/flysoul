@@ -195,7 +195,7 @@ signal, replay of remembered fights between episodes ("sleep"), uniform homeosta
 scaling. There is no trained readout and no scripted policy; `scripts/ablation.py` is
 the check, and `scripts/trend.py` is how progress is read.
 
-**The fly has beaten the boss six times** in roughly 3,200 live episodes:
+**The fly has beaten the boss eight times** in roughly 3,550 live episodes:
 
 | when | circuit | configuration | episode of run | fly HP left | steps |
 |---|---|---|---|---|---|
@@ -205,8 +205,10 @@ the check, and `scripts/trend.py` is how progress is read.
 | 09-18 08:08 | original | exploration temperature 1.5 | 158 | 6% | 65 |
 | 09-18 16:4x | **attack-pattern cells**, fresh weights | γ 0.90, temperature 1.5 | ~65th fight of the new circuit | 6% | 65 |
 | 09-18 19:50 | attack-pattern cells | same, 3x game speed | 565 (fight ~940 of the circuit) | 8% | 59 |
+| 09-18 21:1x | attack-pattern cells | learning rate 0.02, sleep memory 50 | 263 (fight ~1,220 of the circuit) | 9% | 72 |
+| 09-18 21:3x | attack-pattern cells | same | 312 | 17% | 66 |
 
-Frames of the fifth and sixth victories were recorded (`checkpoints/runs/<run>/clip_ep*_victory/`).
+Frames of the fifth to eighth victories were recorded (`checkpoints/runs/<run>/clip_ep*_victory/`).
 The win rate is on the order of 1 in 300; the average fight ends with the boss at ~72%
 and the fly dead after ~25 decisions. The SoulsGym author's reference agent (dueling
 double DQN, replay buffer, 3x game speed, several machines) reached a 45% win rate after
@@ -295,6 +297,23 @@ restart: `--learning-rate 0.02` and `--sleep-memory 50` (and `--impatience` drop
 having measured as irrelevant). Replaying only the best fights was tested offline and
 is harmful (knowledge ~0 on both splits): the rule learns from the contrast between
 good and bad outcomes, and a memory of wins alone removes it.
+
+**A diagnostic probe, not a result (2026-09-18 22:45–23:30).** To learn whether the
++0.39 least-squares ceiling would even *win*, the ceiling's own KC→MBON weights (fitted
+outside the brain on 980 archived fights, `scripts/fit_probe_weights.py`) were loaded
+into the same circuit with learning, sleep and saving off, under a separate fingerprint
+(`run.py --probe-weights`). Over 124 fights the fly survived longer (39 vs 25 decisions)
+but hit less (3.3 vs 5.9 per fight) and left the boss at 79–86% against the learned
+fly's 72%: it parried and backed off. The outcome label the whole offline toolkit scores
+against (hit within three steps = +1, damage = −1) is dominated by damage avoidance, so a
+perfect readout of it is a cautious fly, not a winning one. Two consequences: the
+offline "knowledge" score ranks rules by how well they predict that label, which is a
+proxy and not the objective, and the gap that matters is not rule vs ceiling but label
+vs winning. A second probe fitted to the aggression-weighted learning reward instead
+(held-out +0.46, the signal the fly actually chases) did the same over 120 fights:
+76–82% boss HP, 3.5–4.7 hits, no victory. Neither readout of this Kenyon code, fitted
+on 980 fights of data, plays better than the synapses the fly learned itself. The probe
+weights were discarded and the learned checkpoint restored.
 
 **Throughput, measured rather than assumed.** SoulsGym resets by teleporting and
 rewriting health, not through the game's death reload: a reset is 1.6 s. The fight is

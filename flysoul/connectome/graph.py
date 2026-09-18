@@ -87,6 +87,9 @@ class CircuitTopology:
     # Anatomical region labels per neuron
     labels: List[str] = field(default_factory=list)
 
+    # The configuration the wiring was built from (the encoder reads pattern-cell layout)
+    config: object = None
+
     @property
     def action_channels(self) -> Tuple[str, ...]:
         return ACTION_CHANNELS
@@ -124,7 +127,7 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
     # looks. They are what tells the circuit the approach is finished.
     motion_size_idx = alloc(cfg.num_retina_motion - 2 * _mt)
     # Attack-pattern cells (see CircuitConfig.num_retina_pattern); may be empty.
-    motion_pattern_idx = alloc(cfg.num_retina_pattern)
+    motion_pattern_idx = alloc(cfg.pattern_cell_count)
     motion_idx = np.concatenate(
         [motion_loom_idx, motion_telegraph_idx, motion_size_idx, motion_pattern_idx]
     ).astype(np.int32)
@@ -248,8 +251,18 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
     # Central Complex & Sensory -> Kenyon Cells (sparse random projection in the calyx).
     # Biological fly: ~5-7 claws per KC drawn from a large input pool.
     kc_input_pool = np.concatenate([retina_idx, compass_idx, motion_idx, proprio_idx])
+    pool_p = None
+    if cfg.pattern_pool_share > 0 and len(motion_pattern_idx) > 0:
+        # weight the claw sampling so the pattern bank counts as pattern_pool_share cells
+        pool_p = np.ones(len(kc_input_pool), dtype=np.float64)
+        is_pat = np.isin(kc_input_pool, motion_pattern_idx)
+        pool_p[is_pat] = cfg.pattern_pool_share / float(len(motion_pattern_idx))
+        pool_p /= pool_p.sum()
     for kc in kenyon_idx:
-        sampled = rng.choice(kc_input_pool, size=rng.integers(5, 8), replace=False)
+        if pool_p is None:
+            sampled = rng.choice(kc_input_pool, size=rng.integers(5, 8), replace=False)
+        else:
+            sampled = rng.choice(kc_input_pool, size=rng.integers(5, 8), replace=False, p=pool_p)
         for pre in sampled:
             adj[pre].append(int(kc))
             weights[pre].append(float(neuron_sign[pre]) * float(rng.normal(2.5, 0.4)))
@@ -443,6 +456,7 @@ def build_fly_circuit(config: CircuitConfig | None = None, seed: int = 42) -> Ci
         neuron_sign=neuron_sign,
         coords=coords,
         labels=labels,
+        config=cfg,
     )
 
 

@@ -63,8 +63,15 @@ class MotorDecoder:
         threshold_hz: float = 8.0,
         temperature: float = 4.0,
         step_ms: float = 100.0,
+        hold_when_blocked: bool = False,
     ):
         self.topology = topology
+        # When the pool that won the competition cannot be executed right now (the game
+        # locks attacks and rolls during animations), either hand the decision to the best
+        # *executable* pool (default; measured live, 38% of executed actions arise this
+        # way, mostly "attack won -> retreat executed") or hold still until the body is
+        # free again, so that only actions the circuit chose receive credit.
+        self.hold_when_blocked = hold_when_blocked
         # Minimum firing rate for a pool to count as committed rather than noise,
         # in Hz so it does not silently change meaning with the step length.
         self.threshold = threshold_hz
@@ -107,9 +114,17 @@ class MotorDecoder:
         candidates = list(self.motor_indices.keys())
         if valid_channels is not None:
             allowed = set(valid_channels)
+            if self.hold_when_blocked:
+                winner, _ = self._pick(rates, candidates, explore)
+                return (winner if winner in allowed or winner == IDLE else IDLE), rates
             candidates = [c for c in candidates if c in allowed]
         if not candidates:
             return IDLE, rates
+        winner, _ = self._pick(rates, candidates, explore)
+        return winner, rates
+
+    def _pick(self, rates: Dict[str, float], candidates, explore: bool) -> Tuple[str, float]:
+        """The competition itself: the winning pool among candidates, or idle below threshold."""
 
         scores = np.array([rates[c] for c in candidates], dtype=np.float64)
 
@@ -122,8 +137,8 @@ class MotorDecoder:
             winner = candidates[int(np.argmax(scores))]
 
         if rates[winner] < self.threshold:
-            return IDLE, rates
-        return winner, rates
+            return IDLE, rates[winner]
+        return winner, rates[winner]
 
     # ------------------------------------------------------------------ mapping
 

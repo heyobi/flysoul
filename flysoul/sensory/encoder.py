@@ -45,6 +45,17 @@ class SensoryEncoder:
         self.telegraph_idx = sub.get("motion_telegraph", topology.motion_indices[:0])
         self.size_idx = sub.get("motion_size", topology.motion_indices[:0])
         self.pattern_idx = sub.get("motion_pattern", topology.motion_indices[:0])
+        cfg = getattr(topology, "config", None)
+        self._phase_bins = int(getattr(cfg, "pattern_phase_bins", 0) or 0)
+        g = getattr(cfg, "pattern_cells_per_conjunction", 2)
+        self._cells_per_conj = 2 if g is None else int(g)  # 0 = hashed conjunction code
+        self._pattern_slots = int(getattr(cfg, "pattern_slots", 32) or 32)
+        self._pattern_attacking_only = bool(getattr(cfg, "pattern_attacking_only", True))
+        if self._phase_bins > 0:
+            # phase edges in seconds of the boss's animation clock, denser early where
+            # the dodge decision lives; the last bin is open-ended
+            full = np.array([0.15, 0.3, 0.45, 0.6, 0.8, 1.0, 1.4, 2.0, 3.0], dtype=np.float32)
+            self._phase_edges = full[: self._phase_bins - 1]
         self._pattern_cache: dict = {}
         self.sp_low_idx = sub.get("proprio_stamina_low", topology.proprioceptor_indices[:0])
         self.sp_high_idx = sub.get("proprio_stamina_high", topology.proprioceptor_indices[:0])
@@ -182,8 +193,20 @@ class SensoryEncoder:
         # the way a lobula columnar type answers one visual motion pattern. Combined
         # at random in the Kenyon cells with the telegraph bank, this yields a code for
         # 'this attack, at this point' - without saying anything about what to do.
-        if len(self.pattern_idx) > 0 and state.boss_attacking and state.boss_anim_id >= 0:
-            drive[self._pattern_cells(int(state.boss_anim_id))] += np.float32(thr * 1.45)
+        if len(self.pattern_idx) > 0 and state.boss_anim_id >= 0:
+            if self._phase_bins > 0 and (state.boss_attacking or not self._pattern_attacking_only):
+                # conjunction code: this animation, at this phase
+                slot = int(state.boss_anim_id) % self._pattern_slots
+                b = int(np.searchsorted(self._phase_edges, float(state.boss_anim_time), side="right"))
+                g = self._cells_per_conj
+                if g > 0:
+                    start = (slot * self._phase_bins + b) * g
+                    drive[self.pattern_idx[start:start + g]] += np.float32(thr * 1.45)
+                else:
+                    # hashed: a fixed random eighth of the bank per (animation, phase)
+                    drive[self._pattern_cells(10_000 + slot * self._phase_bins + b)] += np.float32(thr * 1.45)
+            elif self._phase_bins == 0 and state.boss_attacking:
+                drive[self._pattern_cells(int(state.boss_anim_id))] += np.float32(thr * 1.45)
 
         # 3b. Object-size cells: monotonic in how large the boss looks, which is the
         # signal that the approach has arrived. They are subthreshold at range and

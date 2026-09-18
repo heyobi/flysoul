@@ -54,8 +54,13 @@ def states_from_archive(z) -> list[CombatState]:
 
 
 def simulate_kc(z, states, n_pattern: int, seed: int, kc_inh: float | None = None,
-                kc_target: float | None = None) -> np.ndarray:
-    cfg = dataclasses.replace(CircuitConfig(), num_retina_pattern=n_pattern)
+                kc_target: float | None = None, phase_bins: int = 0, cells_per_conj: int = 2,
+                pool_share: int = 0, attacking_only: bool = True, kenyon: int = 0) -> np.ndarray:
+    cfg = dataclasses.replace(CircuitConfig(), num_retina_pattern=n_pattern,
+                              pattern_phase_bins=phase_bins, pattern_cells_per_conjunction=cells_per_conj,
+                              pattern_pool_share=pool_share, pattern_attacking_only=attacking_only)
+    if kenyon > 0:
+        cfg = dataclasses.replace(cfg, num_kenyon_cells=kenyon)
     if kc_inh is not None:
         cfg = dataclasses.replace(cfg, kc_inhibition_ratio=kc_inh)
     bio = BioPhysicsConfig()
@@ -128,6 +133,12 @@ def main() -> int:
     ap.add_argument("--pattern", type=int, action="append", default=None)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-fights", type=int, default=0, help="use only the first N fights (speed)")
+    ap.add_argument("--phase-bins", type=int, default=0,
+                    help="conjunction pattern cells: one group per (animation slot, phase bin); 0 = hashed cells")
+    ap.add_argument("--cells-per-conj", type=int, default=2, help="0 = hashed conjunction over --pattern cells")
+    ap.add_argument("--pool-share", type=int, default=0, help="KC claws sample the pattern bank as if it had this many cells")
+    ap.add_argument("--any-animation", action="store_true", help="conjunction code for every boss animation, not only attacks")
+    ap.add_argument("--kenyon", type=int, default=0, help="number of Kenyon cells (live 1024)")
     ap.add_argument("--kc-sparsity", type=float, default=None,
                     help="Kenyon sparsity target for calibration (live 0.10); calibrates without the cache")
     ap.add_argument("--kc-inhibition", type=float, action="append", default=None,
@@ -147,11 +158,11 @@ def main() -> int:
     print(f"\n{'encoder':24} {'ceiling':>8} {'hebbian':>8} {'attack_light':>13} {'roll':>7} {'advance':>9} {'retreat':>9}")
     for n in variants:
         for inh in inhs:
-            A = simulate_kc(z, states, n, args.seed, inh, args.kc_sparsity)
+            A = simulate_kc(z, states, n, args.seed, inh, args.kc_sparsity, args.phase_bins, args.cells_per_conj, args.pool_share, not args.any_animation, args.kenyon)
             X = A / np.maximum(np.linalg.norm(A, axis=1, keepdims=True), 1e-6)
             r = ceiling(X, z, outc, train, test)
             h = hebbian(A, z, outc, train, test)
-            label = f"pattern={n} apl={inh if inh is not None else 'live'}" + (f" ks={args.kc_sparsity}" if args.kc_sparsity else "")
+            label = f"pattern={n} apl={inh if inh is not None else 'live'}" + (f" kc={args.kenyon}" if args.kenyon else "") + (f" ks={args.kc_sparsity}" if args.kc_sparsity else "") + (f" conj={args.phase_bins}x{args.cells_per_conj} share={args.pool_share} {'any' if args.any_animation else 'attack-only'}" if args.phase_bins else "")
             print(f"{label:24} {r['pooled']:+8.3f} {h:+8.3f} {r['attack_light']:+13.3f} {r['roll']:+7.3f} "
                   f"{r['advance']:+9.3f} {r['retreat']:+9.3f}", flush=True)
     print("\nHigher is a code the plastic synapses can learn more from. The archived KC code "
