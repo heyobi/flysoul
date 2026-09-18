@@ -187,6 +187,12 @@
     body.sleeping #cmd { color: #a5b4fc !important; text-shadow: 0 0 28px rgba(129,140,248,0.8); }
     body.sleeping .eyebrow.sleep-eyebrow { color: #a5b4fc; }
 
+    /* arena: decisions as movement */
+    #arena-canvas { width: 100%; height: 190px; display: block; margin-top: 8px; border-radius: 6px;
+                    background: radial-gradient(circle at 50% 55%, rgba(255,255,255,0.03), rgba(0,0,0,0)); }
+    #arena-foot { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-3); margin-top: 6px; }
+    #arena-foot b { color: var(--text-2); font-weight: 500; }
+
     /* hover tooltip */
     #tip { position: absolute; z-index: 20; pointer-events: none; display: none;
            background: var(--panel-strong); border: 1px solid var(--hair-strong); border-radius: 6px;
@@ -222,7 +228,7 @@
                      width: calc(100vw - 20px); margin: 10px auto; }
       .card { display: none; }
       body[data-tab="combat"] #masthead, body[data-tab="combat"] #feed, body[data-tab="combat"] #combat,
-      body[data-tab="combat"] #lower-third { display: block; }
+      body[data-tab="combat"] #lower-third, body[data-tab="combat"] #arena { display: block; }
       body[data-tab="combat"] #masthead .toolbar { display: none; }
       body[data-tab="brain"] #stage { z-index: 2; }
       body[data-tab="brain"] #masthead { display: block; position: fixed; top: 8px; left: 10px; z-index: 20; margin: 0; }
@@ -249,6 +255,7 @@
       <span class="live" id="live"><i></i><span id="live-text">live connectome</span></span>
     </div>
     <div class="eyebrow" style="margin-top:8px">MaleCNS v1.0 · <i style="font-style:italic">Drosophila</i> connectome · Dark Souls III</div>
+    <div class="eyebrow" id="dataset-note" style="margin-top:4px;display:none;color:#7dd3fc"></div>
     <p class="dek">
       A sign-constrained spiking circuit of <b id="n-neurons">—</b> modelled neurons fights Iudex Gundyr
       through SoulsGym. Every point is a neuron; brightness is spiking in the last tenth of a second.
@@ -261,6 +268,7 @@
       <button class="btn on" id="v-orbit" onclick="toggleOrbit()">Orbit</button>
       <button class="btn on" id="v-bloom" onclick="toggleBloom()">Bloom</button>
       <button class="btn on" id="v-edges" onclick="toggleEdges()">Synapses</button>
+      <button class="btn on" id="v-skel" onclick="toggleSkel()" style="display:none">Skeletons</button>
     </div>
   </section>
 
@@ -320,6 +328,14 @@
       <div class="stat"><div class="k">Victories</div><div class="v num" id="wins">0</div></div>
       <div class="stat"><div class="k">Best boss HP left</div><div class="v num" id="best">—</div></div>
     </div>
+  </section>
+
+  <!-- arena -->
+  <section class="card" id="arena">
+    <div class="eyebrow row"><span>Arena · the decision as movement</span><span class="num" id="arena-act">—</span></div>
+    <canvas id="arena-canvas"></canvas>
+    <div id="arena-foot"><span>fly at centre, facing up · boss <b id="arena-dist">—</b> away</span>
+      <span id="arena-phase">boss idle</span></div>
   </section>
 
   <!-- progress -->
@@ -459,6 +475,9 @@ let N = 0, labels = [], coords = null, isInh = [];
 let points = null, actAttr = null, visAttr = null, act = null;
 let edges = [], edgeLines = null, edgeColors = null, edgeBase = null, edgeHot = null;
 let hulls = new THREE.Group(); scene.add(hulls);
+// Real MaleCNS skeletons (when the server found malecns.json): one line set, with a
+// vertex range per model neuron so its activity can light its own arbor.
+let skelLines = null, skelColors = null, skelRange = null, skelBase = null, skelLastAct = null;
 let selectedFamily = null;
 let actionChannels = [];
 
@@ -490,6 +509,34 @@ function build(data) {
     uniforms: { uSize: { value: 3.6 }, uScale: { value: innerHeight / 2 }, uDream: { value: 0 } },
   });
   points = new THREE.Points(geo, mat); scene.add(points);
+
+  if (data.real && data.skeletons) {
+    const flat = [], cols = []; skelRange = new Array(N).fill(null); skelBase = [];
+    for (let i = 0; i < N; i++) {
+      const s = data.skeletons[i]; if (!s || !s.length) continue;
+      tmp.set(familyOf(labels[i] || '').color);
+      const start = flat.length / 3;
+      for (let k = 0; k < s.length; k++) flat.push(s[k]);
+      const nv = s.length / 3;
+      for (let k = 0; k < nv; k++) cols.push(tmp.r * 0.22, tmp.g * 0.22, tmp.b * 0.26);
+      skelRange[i] = [start, nv]; skelBase[i] = [tmp.r, tmp.g, tmp.b];
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(flat), 3));
+    skelColors = new THREE.BufferAttribute(new Float32Array(cols), 3); skelColors.setUsage(THREE.DynamicDrawUsage);
+    sg.setAttribute('color', skelColors);
+    skelLines = new THREE.LineSegments(sg, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8, depthWrite: false }));
+    scene.add(skelLines); skelLastAct = new Float32Array(N);
+    document.getElementById('v-skel').style.display = '';
+    const note = document.getElementById('dataset-note');
+    note.style.display = ''; note.textContent = `drawn on real somata of ${data.dataset} · ${data.skeleton_count} skeletons`;
+    // Frame the whole CNS: brain on top, nerve cord below.
+    const bb = new THREE.Box3().setFromBufferAttribute(geo.attributes.position);
+    const size = new THREE.Vector3(); bb.getSize(size); const ctr = new THREE.Vector3(); bb.getCenter(ctr);
+    controls.target.copy(ctr); camera.position.set(ctr.x, ctr.y + size.y * 0.1, ctr.z + Math.max(size.x, size.y) * 1.7);
+    controls.maxDistance = Math.max(size.x, size.y) * 4;
+    controls.update();
+  }
 
   // Synapses: dim by default, lit while the presynaptic cell is active, so signal is
   // seen travelling along the wiring rather than appearing at the target.
@@ -578,6 +625,7 @@ function isolate(key) {
   visAttr.needsUpdate = true;
   hulls.children.forEach(h => h.material.uniforms.uAlpha.value = key === null || h.userData.family === key ? 0.32 : 0.05);
   if (edgeLines) edgeLines.material.opacity = key === null ? 0.42 : 0.15;
+  if (skelLines) { skelLines.material.opacity = key === null ? 0.8 : 0.35; }
 }
 
 // ---- hover -------------------------------------------------------------------
@@ -605,11 +653,13 @@ function hover() {
 // ---- views -----------------------------------------------------------------------
 function setView(v) {
   ['front', 'dorsal', 'lateral'].forEach(k => document.getElementById('v-' + k).classList.toggle('on', k === v));
-  const p = { front: [0, 40, 520], dorsal: [0, 540, 40], lateral: [540, 30, 0] }[v];
-  camera.position.set(...p); controls.target.set(0, 0, 0); controls.update();
+  const tgt = controls.target.clone(); const d = camera.position.distanceTo(tgt);
+  const p = { front: [0, 0.08, 1], dorsal: [0, 1, 0.08], lateral: [1, 0.06, 0] }[v];
+  camera.position.set(tgt.x + p[0] * d, tgt.y + p[1] * d, tgt.z + p[2] * d); controls.update();
 }
 function toggleOrbit() { controls.autoRotate = !controls.autoRotate; document.getElementById('v-orbit').classList.toggle('on', controls.autoRotate); }
 function toggleBloom() { bloomOn = !bloomOn; document.getElementById('v-bloom').classList.toggle('on', bloomOn); }
+function toggleSkel() { if (!skelLines) return; skelLines.visible = !skelLines.visible; document.getElementById('v-skel').classList.toggle('on', skelLines.visible); }
 function toggleEdges() { if (!edgeLines) return; edgeLines.visible = !edgeLines.visible; document.getElementById('v-edges').classList.toggle('on', edgeLines.visible); }
 function toggleFeed() {
   const b = document.getElementById('feed-body'), btn = document.getElementById('feed-btn');
@@ -625,7 +675,7 @@ function feedTick(ok) {
   feedFails = ok ? 0 : feedFails + 1;
   document.getElementById('nofeed').style.display = feedFails > 8 ? 'grid' : 'none';
   const idle = document.getElementById('feed-body').style.display === 'none' || document.hidden;
-  const delay = idle ? 1000 : (ok ? 120 : 800);
+  const delay = idle ? 1000 : (ok ? 70 : 800);
   setTimeout(() => { img.src = '/api/frame.jpg?t=' + Date.now(); }, delay);
 }
 feedTick(false);
@@ -754,6 +804,93 @@ function handleSleep(d) {
   }
 }
 
+// =============================================================================
+// Arena: the descending command shown as what it does to the body. Top-down, the fly
+// at the centre facing up, the boss placed from the telemetry's distance and bearing.
+// The little fly is drawn from a handful of ellipses and animated per action: a walk
+// bobs, a strafe sidesteps, a roll tumbles through a full turn, an attack lunges with a
+// slash, a parry raises the forelegs. No game state is invented; only the last action
+// and the boss's position and attack phase are used.
+// =============================================================================
+const arena = {
+  canvas: document.getElementById('arena-canvas'), dist: 8, angle: 0, attacking: false,
+  animT: 0, staggered: false, action: 'idle', actionAt: 0, canAct: true, trail: [], hp: 1,
+};
+function updateArena(d) {
+  if (d.boss_distance !== undefined) arena.dist = d.boss_distance;
+  if (d.boss_angle !== undefined) arena.angle = d.boss_angle;
+  if (d.boss_attacking !== undefined) arena.attacking = !!d.boss_attacking;
+  if (d.boss_anim_time !== undefined) arena.animT = d.boss_anim_time;
+  if (d.boss_staggered !== undefined) arena.staggered = !!d.boss_staggered;
+  if (d.player_can_act !== undefined) arena.canAct = !!d.player_can_act;
+  if (d.boss_hp !== undefined) arena.hp = d.boss_hp;
+  if (d.action_name && d.action_name !== arena.action) { arena.action = d.action_name; arena.actionAt = performance.now(); }
+  else if (d.action_name) { arena.actionAt = Math.max(arena.actionAt, performance.now() - 250); }
+  // trail in metres; the draw scales so the boss always stays on the canvas
+  arena.trail.push([Math.sin(arena.angle) * arena.dist, -Math.cos(arena.angle) * arena.dist]);
+  if (arena.trail.length > 40) arena.trail.shift();
+  document.getElementById('arena-act').textContent = (d.action_name || '—').replace(/_/g, ' ');
+  document.getElementById('arena-dist').textContent = arena.dist.toFixed(1) + ' m';
+  document.getElementById('arena-phase').textContent = arena.staggered ? 'boss staggered · punish window'
+    : arena.attacking ? `boss attacking · ${arena.animT.toFixed(1)} s` : 'boss idle';
+}
+function drawFly(x, cx, cy, action, t, canAct) {
+  // t: seconds since the action was chosen. Returns nothing; draws the fly at (cx, cy).
+  let dx = 0, dy = 0, rot = 0, slash = 0, guard = 0;
+  const ease = Math.max(0, 1 - t / 0.45);
+  if (action === 'advance') dy = -6 * ease + 1.5 * Math.sin(t * 22);
+  else if (action === 'retreat') dy = 6 * ease;
+  else if (action === 'strafe_left') dx = -7 * ease;
+  else if (action === 'strafe_right') dx = 7 * ease;
+  else if (action === 'roll') { rot = Math.min(1, t / 0.45) * Math.PI * 2; dy = -10 * ease; }
+  else if (action === 'attack_light') { dy = -9 * ease; slash = ease; }
+  else if (action === 'attack_heavy') { dy = -14 * ease; slash = ease * 1.6; }
+  else if (action === 'parry') guard = ease;
+  x.save(); x.translate(cx + dx, cy + dy); x.rotate(rot); x.scale(1.35, 1.35);
+  const body = canAct ? '#e5e7eb' : '#9ca3af';
+  // wings
+  x.fillStyle = 'rgba(125,211,252,0.35)';
+  for (const s of [-1, 1]) { x.beginPath(); x.ellipse(s * 9, 2, 9, 4, s * 0.6, 0, Math.PI * 2); x.fill(); }
+  // abdomen, thorax, head
+  x.fillStyle = body;
+  x.beginPath(); x.ellipse(0, 8, 5, 8, 0, 0, Math.PI * 2); x.fill();
+  x.beginPath(); x.ellipse(0, -1, 5.5, 5.5, 0, 0, Math.PI * 2); x.fill();
+  x.fillStyle = '#fbbf24'; x.beginPath(); x.ellipse(0, -8, 3.5, 3, 0, 0, Math.PI * 2); x.fill();
+  // legs
+  x.strokeStyle = 'rgba(229,231,235,0.7)'; x.lineWidth = 1.2;
+  for (const s of [-1, 1]) for (const yy of [-4, 0, 4]) { x.beginPath(); x.moveTo(s * 4, yy); x.lineTo(s * 11, yy + 5 - (guard && yy === -4 ? 12 : 0)); x.stroke(); }
+  if (slash > 0) { x.strokeStyle = `rgba(251,191,36,${0.9 * slash})`; x.lineWidth = 2.5; x.beginPath(); x.arc(0, -10, 16 + 8 * (1 - slash), -2.2, -0.9); x.stroke(); }
+  if (guard > 0) { x.strokeStyle = `rgba(192,132,252,${0.9 * guard})`; x.lineWidth = 3; x.beginPath(); x.arc(0, -6, 14, -2.5, -0.6); x.stroke(); }
+  x.restore();
+}
+function drawArena() {
+  const c = arena.canvas; if (!c || !c.clientWidth) return;
+  const dpr = Math.min(devicePixelRatio, 2), w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const x = c.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h);
+  const cx = w / 2, cy = h * 0.72;
+  const px = Math.min(11, (cy - 18) / Math.max(1.5, arena.dist));  // metres -> pixels
+  // range rings at 2, 4, 6 m
+  x.strokeStyle = 'rgba(255,255,255,0.06)'; x.lineWidth = 1;
+  for (const r of [2, 4, 6]) { x.beginPath(); x.arc(cx, cy, r * px, 0, Math.PI * 2); x.stroke(); }
+  if (px >= 8) { x.fillStyle = 'rgba(255,255,255,0.25)'; x.font = '9px Inter'; x.fillText('2 m', cx + 2 * px + 3, cy + 12); x.fillText('4 m', cx + 4 * px + 3, cy + 12); }
+  // boss trail and marker
+  arena.trail.forEach(([tx, ty], i) => { x.fillStyle = `rgba(251,113,133,${0.04 + 0.3 * i / arena.trail.length})`; x.beginPath(); x.arc(cx + tx * px, cy + ty * px, 2, 0, Math.PI * 2); x.fill(); });
+  const bx = cx + Math.sin(arena.angle) * arena.dist * px, by = cy - Math.cos(arena.angle) * arena.dist * px;
+  const r = 9 + (arena.attacking ? 3 * Math.sin(performance.now() / 60) : 0);
+  x.fillStyle = arena.staggered ? '#fbbf24' : arena.attacking ? '#fb7185' : 'rgba(251,113,133,0.55)';
+  x.beginPath(); x.arc(bx, by, r, 0, Math.PI * 2); x.fill();
+  if (arena.attacking) {  // swing progress arc: the window the fly must read
+    x.strokeStyle = '#fff'; x.lineWidth = 2; x.beginPath();
+    x.arc(bx, by, r + 5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, arena.animT / 1.2)); x.stroke();
+  }
+  // boss health as a short bar
+  x.fillStyle = 'rgba(255,255,255,0.12)'; x.fillRect(bx - 14, by - r - 12, 28, 3);
+  x.fillStyle = '#fb7185'; x.fillRect(bx - 14, by - r - 12, 28 * arena.hp, 3);
+  drawFly(x, cx, cy, arena.action, (performance.now() - arena.actionAt) / 1000, arena.canAct);
+  if (sleeping) { x.fillStyle = 'rgba(99,102,241,0.12)'; x.fillRect(0, 0, w, h); }
+}
+
 const src = new EventSource('/api/stream');
 src.onopen = () => setLive(true, 'live connectome');
 src.onerror = () => setLive(false, 'reconnecting');
@@ -801,6 +938,7 @@ src.onmessage = e => {
   if (d.total_ltp !== undefined) $('ltp').textContent = d.total_ltp;
   if (d.total_ltd !== undefined) $('ltd').textContent = d.total_ltd;
   updatePools(d);
+  updateArena(d);
 
   if (act && d.spikes) for (const i of d.spikes) if (i < N) act[i] = 1;
 };
@@ -817,6 +955,20 @@ function frame() {
     const k = Math.exp(-dt / (sleeping ? 0.34 : 0.14));
     for (let i = 0; i < N; i++) act[i] *= k;
     actAttr.needsUpdate = true;
+    if (skelLines && skelLines.visible) {
+      let touched = false;
+      for (let i = 0; i < N; i++) {
+        const r = skelRange[i]; if (!r) continue;
+        const a = act[i]; if (Math.abs(a - skelLastAct[i]) < 0.01) continue;
+        skelLastAct[i] = a; touched = true;
+        const b = skelBase[i];
+        const hr = sleeping ? 0.66 : 1.0, hg = sleeping ? 0.60 : 1.0, hb = 1.0;
+        const cr = b[0] * 0.22 + (hr - b[0] * 0.22) * a, cg = b[1] * 0.22 + (hg - b[1] * 0.22) * a, cb = b[2] * 0.26 + (hb - b[2] * 0.26) * a;
+        const arr = skelColors.array;
+        for (let v = r[0], end = r[0] + r[1]; v < end; v++) { arr[v * 3] = cr; arr[v * 3 + 1] = cg; arr[v * 3 + 2] = cb; }
+      }
+      if (touched) skelColors.needsUpdate = true;
+    }
     const u = points.material.uniforms.uDream;
     u.value += ((sleeping ? 1 : 0) - u.value) * Math.min(1, dt * 1.5);
     if (sleeping && selectedFamily === null) {
@@ -835,6 +987,7 @@ function frame() {
     hover();
   }
   controls.update();
+  drawArena();
   if (composer && bloomOn) composer.render(); else renderer.render(scene, camera);
 }
 frame();

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, List, Optional
 
 import numpy as np
@@ -124,9 +125,39 @@ class SleepConsolidation:
 
     # ------------------------------------------------------------------ archive
 
-    def dump(self, path) -> int:
-        """Write the archive to an .npz for offline experiments. Returns transitions written."""
-        fights = self.archive
+    def save_memory(self, path) -> int:
+        """Persist what sleep would replay, so a restart does not forget the recent fights."""
+        return self.dump(path, fights=self.memory)
+
+    def load_memory(self, path) -> int:
+        """Restore remembered fights written by save_memory. Returns fights restored."""
+        path = Path(path)
+        if not path.exists():
+            return 0
+        try:
+            z = {k: v for k, v in np.load(path).items()}
+        except Exception:
+            return 0
+        channels = list(z["channels"])
+        fights: List[List[Transition]] = []
+        extra = z.get("extra")
+        for f_id in np.unique(z["fight"]):
+            idx = np.flatnonzero(z["fight"] == f_id)
+            fights.append([
+                Transition(
+                    z["spikes"][i], channels[z["channel"][i]] if z["channel"][i] >= 0 else None,
+                    float(z["reward"][i]), bool(z["terminal"][i]), float(z["anim_t"][i]),
+                    bool(z["attacking"][i]), float(z["damage_taken"][i]), float(z["hit"][i]),
+                    None if extra is None else extra[i],
+                )
+                for i in idx
+            ])
+        self.memory = fights[-self.memory_episodes:]
+        return len(self.memory)
+
+    def dump(self, path, fights=None) -> int:
+        """Write fights to an .npz (the archive by default). Returns transitions written."""
+        fights = self.archive if fights is None else fights
         n = sum(len(f) for f in fights)
         if n == 0:
             return 0

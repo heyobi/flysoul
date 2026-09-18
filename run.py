@@ -305,6 +305,11 @@ def main():
             f"{args.sleep_memory} remembered fights, {args.sleep_passes} passes, at "
             f"{args.sleep_gain:g}x learning rate."
         )
+        if not args.no_memory:
+            restored = sleep.load_memory(CHECKPOINT_DIR / "sleep_memory.npz")
+            if restored:
+                console.print(f"[green]OK Restored {restored} remembered fights[/green] "
+                              "so the restart forgets nothing.")
 
     enable_web = not args.no_web
     if enable_web:
@@ -563,6 +568,11 @@ def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sl
             })
     if not args.no_memory:
         plasticity.save(memory_path)
+        if sleep_obj is not None:
+            try:
+                sleep_obj.save_memory(CHECKPOINT_DIR / "sleep_memory.npz")
+            except Exception as exc:
+                console.print(f"[yellow]could not save sleep memory: {exc}[/yellow]")
 
 
 def ensure_lock_on(env, console, seconds: float = 12.0, quiet: bool = False):
@@ -931,7 +941,9 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                             "steer towards Iudex."
                         )
 
-            if step % 3 == 0 and not mock_mode:
+            # Every step: the game only advances during steps, so this is the
+            # feed's true frame rate (10 fps), and a grab costs ~5 ms.
+            if not mock_mode:
                 frame = grab_video_frame(env)
                 if frame is not None:
                     frames.append(frame)
@@ -943,6 +955,10 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                     "player_hp": state.player_hp, "player_sp": state.player_sp,
                     "boss_hp": state.boss_hp, "boss_distance": state.distance,
                     "boss_attacking": state.boss_attacking, "action_name": channel,
+                    "boss_angle": round(float(state.angle), 3),
+                    "boss_anim_time": round(float(state.boss_anim_time), 2),
+                    "boss_staggered": bool(state.boss_staggered),
+                    "player_can_act": bool(state.player_can_act),
                     "lock_on": state.lock_on,
                     "dopamine": float(plasticity.dopamine_level),
                     "td_error": round(float(plasticity.last_td_error), 3),

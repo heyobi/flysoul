@@ -42,6 +42,87 @@ def get_latest_frame() -> Optional[bytes]:
         return _latest_frame_jpeg
 
 
+MALECNS_PATH = Path(__file__).parent / "malecns.json"
+SCENE_UNITS_PER_UM = 0.45  # brain extent ~1000 um -> fits the viewer's +-220 frame
+
+_FAMILY_KEYS = (
+    "Retina_OpticLobe", "Lobula_Motion", "Compass_EB", "Compass_Ring_Inhibitory",
+    "Central_Complex_Inhibitory", "Central_Complex", "Kenyon_Cell", "APL_Inhibitory",
+    "MBON_", "Dopamine_PPL1", "Dopamine_PAM", "Nociceptor", "Proprioceptor",
+    "Vigor_Gate_Inhibitory", "Approach_Brake_Inhibitory", "Premotor_Inhibitory_", "Motor_",
+)
+
+
+def _family_of(label: str) -> Optional[str]:
+    best = None
+    for key in _FAMILY_KEYS:
+        if label.startswith(key) and (best is None or len(key) > len(best)):
+            best = key
+    return best
+
+
+def _map_to_malecns(topology: CircuitTopology) -> Optional[Dict[str, Any]]:
+    """Place every model neuron on a real MaleCNS neuron of the same cell type.
+
+    The circuit is derived from the connectome's cell types and wiring statistics, not
+    copied neuron by neuron, so the mapping is by family: each modelled Kenyon cell is
+    drawn at the soma (and along the skeleton, where fetched) of a real Kenyon cell,
+    assigned round-robin. What is drawn is real anatomy; which neuron is which is a
+    presentation choice, and the file says so.
+    """
+    if not MALECNS_PATH.exists():
+        return None
+    try:
+        data = json.loads(MALECNS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    fams = data.get("families") or {}
+    centre = np.asarray(data.get("centre", [0, 0, 0]), dtype=np.float64)
+    um = float(data.get("voxel_um", 0.008))
+
+    def to_scene(v):
+        p = (np.asarray(v, dtype=np.float64) - centre) * um * SCENE_UNITS_PER_UM
+        # Dataset axes: x lateral, y dorsal-ventral, z anterior-posterior along the
+        # CNS. Show the CNS upright: brain on top, nerve cord below, viewed from the front.
+        return [float(p[0]), float(-p[2]), float(-p[1])]
+
+    # Which way is the brain? Kenyon cell somata are in the brain, ascending neurons
+    # come up from the nerve cord; flip the vertical axis so the brain ends up on top.
+    kc = fams.get("Kenyon_Cell") or []
+    an = fams.get("Nociceptor") or []
+    flip = 1.0
+    if kc and an:
+        if np.mean([r["soma"][2] for r in kc]) > np.mean([r["soma"][2] for r in an]):
+            flip = -1.0
+
+    cursor: Dict[str, int] = {}
+    coords, skeletons, types = [], [], []
+    n_skel = 0
+    for label, model_xyz in zip(topology.labels, topology.coords.tolist()):
+        fam = _family_of(label or "")
+        rows = fams.get(fam) if fam else None
+        if not rows:
+            coords.append(model_xyz); skeletons.append(None); types.append(None)
+            continue
+        i = cursor.get(fam, 0); cursor[fam] = i + 1
+        row = rows[i % len(rows)]
+        p = to_scene(row["soma"]); p[1] *= flip
+        coords.append([round(p[0], 2), round(p[1], 2), round(p[2], 2)])
+        types.append(row.get("type"))
+        segs = row.get("segments")
+        if segs and i < len(rows):  # a skeleton is drawn once, for its first assignee
+            flat: List[float] = []
+            for a, b in segs:
+                pa, pb = to_scene(a), to_scene(b)
+                flat += [round(pa[0], 1), round(pa[1] * flip, 1), round(pa[2], 1),
+                         round(pb[0], 1), round(pb[1] * flip, 1), round(pb[2], 1)]
+            skeletons.append(flat); n_skel += 1
+        else:
+            skeletons.append(None)
+    return {"coords": coords, "skeletons": skeletons, "types": types,
+            "skeleton_count": n_skel, "dataset": data.get("dataset")}
+
+
 def set_topology(topology: CircuitTopology):
     """Cache the circuit topology for the 3D client."""
     global _topology_data
@@ -64,9 +145,15 @@ def set_topology(topology: CircuitTopology):
     for label in topology.labels:
         populations[label] = populations.get(label, 0) + 1
 
+    real = _map_to_malecns(topology)
     _topology_data = {
         "num_neurons": num_n,
-        "coords": topology.coords.tolist(),
+        "coords": real["coords"] if real else topology.coords.tolist(),
+        "real": bool(real),
+        "dataset": real["dataset"] if real else None,
+        "skeletons": real["skeletons"] if real else None,
+        "real_types": real["types"] if real else None,
+        "skeleton_count": real["skeleton_count"] if real else 0,
         "labels": topology.labels,
         "edges": edge_pairs[:4000],  # Top 4,000 synaptic pathways
         # Sign per neuron: the circuit is sign-constrained, and which cells inhibit is
