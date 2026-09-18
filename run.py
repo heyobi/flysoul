@@ -145,15 +145,14 @@ def parse_args():
     parser.add_argument("--game-speed", type=float, default=1.0,
                         help="Game speed multiplier during steps (SoulsGym game_speed). The "
                              "brain simulates a 100 ms step in ~33 ms, so up to 3x keeps up. "
-                             "Fights are ~10%% of wall time, so this buys little on its own.")
+                             "Measured: the fight is ~70%% of an episode's wall clock because "
+                             "SoulsGym advances animation-locked steps in game time, so 3x "
+                             "cuts an episode from 28 s to 11.5 s.")
     parser.add_argument("--early-stop-hp", type=float, default=0.0,
                         help="End the fight when the fly's HP falls to this fraction, before "
-                             "the killing blow, so the reset is a teleport instead of the "
-                             "game's death reload. Measured: 90%% of wall time is that reload; "
-                             "Iudex hits for a median 27%% HP and the fly dies from ~13%%, so "
-                             "0.35 avoids 99%% of deaths at the cost of about a third of the "
-                             "HP budget. The death penalty is applied as SoulsGym would. "
-                             "0 disables.")
+                             "the killing blow. Kept for experiments; measured, SoulsGym's "
+                             "reset is already a 1.6 s teleport with no death reload, so this "
+                             "buys nothing and changes the task. 0 disables (default).")
     parser.add_argument("--no-web", action="store_true",
                         help="Disable the real-time 3D WebGL fruit fly brain visualizer.")
     parser.add_argument("--port", type=int, default=8080,
@@ -303,7 +302,15 @@ def main():
 
     topology, engine, encoder, decoder, plasticity, memory_path = build_agent(args, console)
 
-    recorder = RunRecorder(CHECKPOINT_DIR, args, tag="game" if args.game else "mock")
+    # The wiring's fingerprint, not the learned state's: the checkpoint is named after
+    # it, and the learned weights (already loaded into the topology here) would give
+    # a different hash every run.
+    fingerprint = memory_path.stem.split("_", 1)[1]
+    recorder = RunRecorder(CHECKPOINT_DIR, args, tag="game" if args.game else "mock",
+                           fingerprint=fingerprint)
+    prior_boss, prior_hits = ([], []) if args.no_memory else RunRecorder.prior_series(CHECKPOINT_DIR, fingerprint)
+    if prior_boss:
+        console.print(f"[dim]{len(prior_boss)} earlier fights on this circuit will be shown in the learning curve[/dim]")
     console.print(f"[dim]recording this run to {recorder.dir}[/dim]")
 
     sleep = None
@@ -458,6 +465,10 @@ def main():
                 broadcast_event({
                     "type": "episode_summary", "episode": ep, "steps": summary["steps"],
                     "reward": summary["reward"], "history": episode_history[-25:],
+                    # The whole run, compactly, so the page can show noise and trend
+                    # rather than a 25-episode window that wanders with the noise.
+                    "boss_series": prior_boss + [round(s["boss_hp_pct"] * 100) for s in episode_history],
+                    "hits_series": prior_hits + [int(s["hits"]) for s in episode_history],
                     "victories": victories, "mean_weight": float(plasticity.mean_plastic_weight),
                     "total_ltp": plasticity.total_ltp_events, "total_ltd": plasticity.total_ltd_events,
                     "action_counts": global_action_counts,

@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from offline_replay import old_update_traces  # noqa: E402
 
 WINDOW = 3
-LIVE = dict(rule="tagged", elig=0.92, credit=0.90, lr=0.08, critic_lr=0.05, discount=0.95, gain=0.5,
+LIVE = dict(rule="tagged", elig=0.92, credit=0.90, lr=0.08, critic_lr=0.05, discount=0.90, gain=0.5,
             passes=3)
 
 

@@ -54,7 +54,7 @@ def _jsonable(value: Any) -> Any:
 
 
 class RunRecorder:
-    def __init__(self, root: Path, args: Any = None, tag: str = ""):
+    def __init__(self, root: Path, args: Any = None, tag: str = "", fingerprint: Optional[str] = None):
         self.run_id = time.strftime("%Y%m%d-%H%M%S") + (f"-{tag}" if tag else "")
         self.dir = Path(root) / "runs" / self.run_id
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -66,9 +66,38 @@ class RunRecorder:
             "host": socket.gethostname(),
             "python": sys.version.split()[0],
             "git": _git_revision(self.root.parent),
+            "fingerprint": fingerprint,
             "args": _jsonable(vars(args)) if args is not None and hasattr(args, "__dict__") else _jsonable(args),
         }
         (self.dir / "run.json").write_text(json.dumps(header, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def prior_series(root: Path, fingerprint: str) -> tuple[list, list]:
+        """Boss HP and hits of every earlier fight recorded on the same circuit.
+
+        Restarts are frequent and each starts a new run folder; the learning curve
+        belongs to the circuit, not to the process, so earlier runs with the same
+        wiring fingerprint are read back in chronological order.
+        """
+        boss, hits = [], []
+        for run_dir in sorted((Path(root) / "runs").glob("*/")):
+            try:
+                header = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if header.get("fingerprint") != fingerprint:
+                continue
+            try:
+                for line in (run_dir / "episodes.jsonl").read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    e = json.loads(line)
+                    if e.get("type") == "episode":
+                        boss.append(round(float(e.get("boss_hp_pct", 1.0)) * 100))
+                        hits.append(int(e.get("hits", 0)))
+            except Exception:
+                continue
+        return boss, hits
 
     # ------------------------------------------------------------------ events
 

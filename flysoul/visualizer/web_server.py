@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -553,6 +554,14 @@ INDEX_HTML = """<!DOCTYPE html>
 
 class VisualizerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        try:
+            self._route()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            # A viewer closed the tab mid-response. Nothing to do and nothing to log:
+            # with a public link this happens many times an hour.
+            return
+
+    def _route(self):
         # Cache-busting query strings (frame.jpg?t=...) are not part of the route.
         self.path = self.path.split("?", 1)[0]
         if self.path == "/" or self.path == "/index.html":
@@ -640,9 +649,19 @@ class VisualizerHandler(BaseHTTPRequestHandler):
         return
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """A viewer dropping a connection is not an error worth a traceback in the fight log."""
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def start_visualizer(host: str = "0.0.0.0", port: int = 8080) -> ThreadingHTTPServer:
     """Start the 3D fruit fly brain visualizer server in a background daemon thread."""
-    server = ThreadingHTTPServer((host, port), VisualizerHandler)
+    server = _QuietServer((host, port), VisualizerHandler)
     th = threading.Thread(target=server.serve_forever, daemon=True)
     th.start()
     return server

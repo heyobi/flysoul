@@ -340,9 +340,14 @@
 
   <!-- progress -->
   <section class="card" id="progress">
-    <div class="eyebrow row"><span>Learning · last 25 episodes</span><span class="num" id="ep-count">0 episodes</span></div>
+    <div class="eyebrow row"><span>Learning · this circuit</span><span class="num" id="ep-count">0 episodes</span></div>
+    <div class="chart" style="margin-top:10px">
+      <div class="t"><span>Boss HP · every fight this circuit has had</span><b class="num" id="c0v">—</b></div>
+      <canvas id="c0" style="height:96px"></canvas>
+      <div class="pool-foot" id="trend-line" style="margin-top:4px">waiting for episodes</div>
+    </div>
     <div class="charts">
-      <div class="chart"><div class="t"><span>Boss HP left</span><b class="num" id="c1v">—</b></div><canvas id="c1"></canvas></div>
+      <div class="chart"><div class="t"><span>Boss HP · last 25</span><b class="num" id="c1v">—</b></div><canvas id="c1"></canvas></div>
       <div class="chart"><div class="t"><span>Survival</span><b class="num" id="c2v">—</b></div><canvas id="c2"></canvas></div>
       <div class="chart"><div class="t"><span>Hits landed</span><b class="num" id="c3v">—</b></div><canvas id="c3"></canvas></div>
     </div>
@@ -757,8 +762,59 @@ function spark(id, data, color, invert) {
   x.strokeStyle = 'rgba(255,255,255,0.35)'; x.lineWidth = 1; x.stroke(); x.setLineDash([]);
   const last = data[n - 1]; x.beginPath(); x.arc(X(n - 1), Y(last), 2.6, 0, Math.PI * 2); x.fillStyle = '#fff'; x.fill();
 }
+// Whole-run statistics: the honest way to read progress. Single fights scatter by
+// about 18 points, so a 50-fight block mean has a standard error near 2.6 points and
+// two blocks differ by chance up to ~7. What counts is a slope whose 95% interval
+// excludes zero, or a first-half/second-half difference the U test finds unlikely.
+let runSeries = { boss: [], hits: [] };
+function rankAvg(a) { const idx = a.map((v, i) => [v, i]).sort((x, y) => x[0] - y[0]); const r = new Array(a.length); let i = 0;
+  while (i < idx.length) { let j = i; while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++; const rk = (i + j) / 2 + 1; for (let k = i; k <= j; k++) r[idx[k][1]] = rk; i = j + 1; } return r; }
+function mannWhitneyP(a, b) {
+  const r = rankAvg(a.concat(b)); const na = a.length, nb = b.length; if (!na || !nb) return 1;
+  let ra = 0; for (let i = 0; i < na; i++) ra += r[i];
+  const u = ra - na * (na + 1) / 2, mu = na * nb / 2, sd = Math.sqrt(na * nb * (na + nb + 1) / 12);
+  const z = sd ? (u - mu) / sd : 0; return erfc(Math.abs(z) / Math.SQRT2);
+}
+function erfc(x) { const t = 1 / (1 + 0.5 * x); const y = t * Math.exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277))))))))); return y; }
+function runStats(y) {
+  const n = y.length; if (n < 10) return null;
+  const mean = y.reduce((a, b) => a + b, 0) / n, sd = Math.sqrt(y.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
+  const mx = (n - 1) / 2; let sxx = 0, sxy = 0; y.forEach((v, i) => { sxx += (i - mx) ** 2; sxy += (i - mx) * (v - mean); });
+  const b = sxy / sxx; let ss = 0; y.forEach((v, i) => { ss += (v - (mean + b * (i - mx))) ** 2; });
+  const se = Math.sqrt(ss / Math.max(1, n - 2) / sxx);
+  const half = Math.floor(n / 2), a = y.slice(0, half), c = y.slice(half);
+  const ma = a.reduce((p, q) => p + q, 0) / a.length, mc = c.reduce((p, q) => p + q, 0) / c.length;
+  return { n, mean, sd, slope100: b * 100, ci100: 1.96 * se * 100, firstHalf: ma, secondHalf: mc, p: mannWhitneyP(a, c), se50: sd / Math.sqrt(50) };
+}
+function drawRunChart() {
+  const c = document.getElementById('c0'), y = runSeries.boss; if (!c || y.length < 2) return;
+  const dpr = Math.min(devicePixelRatio, 2), w = c.clientWidth || 300, h = c.clientHeight || 96;
+  c.width = w * dpr; c.height = h * dpr; const x = c.getContext('2d'); x.scale(dpr, dpr); x.clearRect(0, 0, w, h);
+  const X = i => 3 + i / Math.max(1, y.length - 1) * (w - 6), Y = v => 4 + (100 - v) / 100 * (h - 8);
+  x.strokeStyle = 'rgba(255,255,255,0.06)'; x.lineWidth = 1;
+  for (const g of [25, 50, 75]) { x.beginPath(); x.moveTo(0, Y(g)); x.lineTo(w, Y(g)); x.stroke(); }
+  x.fillStyle = 'rgba(251,113,133,0.35)';
+  y.forEach((v, i) => { x.beginPath(); x.arc(X(i), Y(v), 1.3, 0, Math.PI * 2); x.fill(); });
+  const win = Math.min(50, Math.max(5, Math.floor(y.length / 4)));
+  x.beginPath(); for (let i = win - 1; i < y.length; i++) { let s = 0; for (let k = i - win + 1; k <= i; k++) s += y[k]; const v = s / win; i === win - 1 ? x.moveTo(X(i), Y(v)) : x.lineTo(X(i), Y(v)); }
+  x.strokeStyle = '#fb7185'; x.lineWidth = 2; x.lineJoin = 'round'; x.stroke();
+  const st = runStats(y);
+  if (st) {
+    const mx = (y.length - 1) / 2, b = st.slope100 / 100;
+    x.setLineDash([4, 4]); x.beginPath(); x.moveTo(X(0), Y(st.mean - b * mx)); x.lineTo(X(y.length - 1), Y(st.mean + b * mx));
+    x.strokeStyle = 'rgba(255,255,255,0.45)'; x.lineWidth = 1; x.stroke(); x.setLineDash([]);
+    const sig = Math.abs(st.slope100) > st.ci100;
+    document.getElementById('c0v').textContent = `n ${st.n} · mean ${st.mean.toFixed(1)}% · ${win}-fight average`;
+    document.getElementById('trend-line').innerHTML =
+      `Per-fight SD <b>${st.sd.toFixed(0)}</b> pts, so a 50-fight block mean is uncertain by ±<b>${(2 * st.se50).toFixed(0)}</b>. ` +
+      `Trend <b>${st.slope100 >= 0 ? '+' : ''}${st.slope100.toFixed(1)}</b> pts / 100 fights (95% ±${st.ci100.toFixed(1)}) → ` +
+      `<b style="color:${sig ? (st.slope100 < 0 ? 'var(--green)' : 'var(--rose)') : 'var(--text-2)'}">${sig ? (st.slope100 < 0 ? 'improving' : 'worsening') : 'not distinguishable from noise'}</b>. ` +
+      `Halves ${st.firstHalf.toFixed(1)}% → ${st.secondHalf.toFixed(1)}%, U-test p = <b>${st.p.toFixed(3)}</b>.`;
+  }
+}
 function drawCharts() {
   spark('c1', hist.boss, '#fb7185'); spark('c2', hist.steps, '#7dd3fc'); spark('c3', hist.hits, '#fbbf24');
+  drawRunChart();
 }
 
 function setDopamine(v) {
@@ -901,13 +957,14 @@ src.onmessage = e => {
   const pct = v => Math.round(v * 100) + '%';
 
   if (d.type === 'episode_summary' && d.history) {
+    if (d.boss_series) { runSeries.boss = d.boss_series; runSeries.hits = d.hits_series || []; }
     hist.boss = d.history.map(h => Math.round((h.boss_hp_pct ?? 1) * 100));
     hist.steps = d.history.map(h => h.steps); hist.hits = d.history.map(h => h.hits || 0);
     const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
     $('c1v').textContent = `${hist.boss[hist.boss.length - 1]}% · mean ${mean(hist.boss).toFixed(0)}%`;
     $('c2v').textContent = `${hist.steps[hist.steps.length - 1]} · mean ${mean(hist.steps).toFixed(0)} steps`;
     $('c3v').textContent = `${hist.hits[hist.hits.length - 1]} · mean ${mean(hist.hits).toFixed(1)}`;
-    $('ep-count').textContent = `${d.episode} episodes`;
+    $('ep-count').textContent = `${(d.boss_series || []).length} fights on this circuit · ${d.episode} this run`;
     if (d.victories !== undefined) victories = d.victories;
     best = Math.min(best ?? 100, ...hist.boss);
     $('wins').textContent = victories; $('best').textContent = best + '%';
