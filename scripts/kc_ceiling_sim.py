@@ -53,12 +53,20 @@ def states_from_archive(z) -> list[CombatState]:
     return out
 
 
-def simulate_kc(z, states, n_pattern: int, seed: int) -> np.ndarray:
+def simulate_kc(z, states, n_pattern: int, seed: int, kc_inh: float | None = None,
+                kc_target: float | None = None) -> np.ndarray:
     cfg = dataclasses.replace(CircuitConfig(), num_retina_pattern=n_pattern)
+    if kc_inh is not None:
+        cfg = dataclasses.replace(cfg, kc_inhibition_ratio=kc_inh)
     bio = BioPhysicsConfig()
     topo = build_fly_circuit(cfg, seed=seed)
     t0 = time.perf_counter()
-    rep, cached = calibrate_or_load(topo, cfg, bio, seed=seed)
+    if kc_target is not None:
+        # a different Kenyon sparsity target: calibrate directly, bypassing the cache
+        from flysoul.connectome.calibration import calibrate_circuit
+        rep, cached = calibrate_circuit(topo, bio, kc_sparsity_target=kc_target), False
+    else:
+        rep, cached = calibrate_or_load(topo, cfg, bio, seed=seed)
     print(f"  pattern={n_pattern}: {topo.num_neurons} neurons, calibration "
           f"{'cached' if cached else f'{time.perf_counter() - t0:.0f}s'} ({'converged' if rep.converged else 'NOT converged'})")
     engine = ConnectomeEngine(topo.ptr, topo.post, topo.weight, bio)
@@ -76,10 +84,26 @@ def simulate_kc(z, states, n_pattern: int, seed: int) -> np.ndarray:
         kc[i] = counts[topo.kenyon_indices] > 0
         ch = z["channel"][i]
         enc.set_efference(channels[ch] if ch >= 0 else None)
+    freq = kc.mean(0)
     print(f"  simulated {len(states)} steps in {time.perf_counter() - t0:.0f}s; "
-          f"KC sparsity {kc.mean():.1%}")
-    kc /= np.maximum(np.linalg.norm(kc, axis=1, keepdims=True), 1e-6)
+          f"KC sparsity {kc.mean():.1%}; cells firing on >50% of steps {np.mean(freq > 0.5):.0%}, never {np.mean(freq == 0):.0%}")
     return kc
+
+
+def hebbian(A, z, outc, train, test) -> float:
+    """What a three-factor rule computes: w = sum of input x (outcome - mean outcome),
+    scored held-out the same way. The gap to the ceiling is what decorrelation buys."""
+    px, py = [], []
+    for ch in ("attack_light", "roll", "advance", "retreat"):
+        k = ACTION_CHANNELS.index(ch)
+        m = (z["channel"] == k) & (outc != 0)
+        tr, te = m & train, m & test
+        if tr.sum() < 15 or te.sum() < 10:
+            continue
+        w = A[tr].T @ (outc[tr] - outc[tr].mean())
+        pred = A[te] @ w
+        r = np.empty(len(pred)); r[np.argsort(pred)] = np.arange(len(pred)); px.append(r / max(1, len(pred) - 1)); py.append(outc[te])
+    return spearman(np.concatenate(px), np.concatenate(py)) if px else float("nan")
 
 
 def ceiling(X, z, outc, train, test) -> dict:
@@ -104,6 +128,10 @@ def main() -> int:
     ap.add_argument("--pattern", type=int, action="append", default=None)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--max-fights", type=int, default=0, help="use only the first N fights (speed)")
+    ap.add_argument("--kc-sparsity", type=float, default=None,
+                    help="Kenyon sparsity target for calibration (live 0.10); calibrates without the cache")
+    ap.add_argument("--kc-inhibition", type=float, action="append", default=None,
+                    help="APL feedback strength(s) to simulate (CircuitConfig.kc_inhibition_ratio, live 1.35)")
     args = ap.parse_args()
     z = {k: v for k, v in np.load(args.archive).items()}
     if args.max_fights:
@@ -115,11 +143,17 @@ def main() -> int:
     train, test = np.isin(z["fight"], fights[::2]), np.isin(z["fight"], fights[1::2])
     print(f"{len(states)} steps, {len(fights)} fights, {len(np.unique(z['extra'][:, list(z['extra_names']).index('boss_anim_id')]))} boss animations")
     variants = args.pattern or [0, 64]
-    print(f"\n{'encoder':16} {'pooled':>8} {'attack_light':>13} {'roll':>7} {'advance':>9} {'retreat':>9}")
+    inhs = args.kc_inhibition or [None]
+    print(f"\n{'encoder':24} {'ceiling':>8} {'hebbian':>8} {'attack_light':>13} {'roll':>7} {'advance':>9} {'retreat':>9}")
     for n in variants:
-        X = simulate_kc(z, states, n, args.seed)
-        r = ceiling(X, z, outc, train, test)
-        print(f"pattern={n:<8} {r['pooled']:+8.3f} {r['attack_light']:+13.3f} {r['roll']:+7.3f} {r['advance']:+9.3f} {r['retreat']:+9.3f}")
+        for inh in inhs:
+            A = simulate_kc(z, states, n, args.seed, inh, args.kc_sparsity)
+            X = A / np.maximum(np.linalg.norm(A, axis=1, keepdims=True), 1e-6)
+            r = ceiling(X, z, outc, train, test)
+            h = hebbian(A, z, outc, train, test)
+            label = f"pattern={n} apl={inh if inh is not None else 'live'}" + (f" ks={args.kc_sparsity}" if args.kc_sparsity else "")
+            print(f"{label:24} {r['pooled']:+8.3f} {h:+8.3f} {r['attack_light']:+13.3f} {r['roll']:+7.3f} "
+                  f"{r['advance']:+9.3f} {r['retreat']:+9.3f}", flush=True)
     print("\nHigher is a code the plastic synapses can learn more from. The archived KC code "
           "(what the live fly actually saw) is the reference for pattern=0.")
     return 0

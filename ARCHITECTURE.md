@@ -230,3 +230,9 @@ survives context loss. Each is measured in the README's results section.
   the boss (not the body) with a timeout; `run.ensure_lock_on` re-locks mid-fight after
   three unlocked steps; `recover_game_window` closes Steam Big Picture and refocuses the
   game when a reset fails.
+- **Learning diagnostics** (`scripts/diagnose_learning.py`, `scripts/offline_stability.py`,
+  `scripts/offline_rule_limit.py`, `scripts/centered_rule.py` as an offline-only candidate
+  rule; `scripts/kc_ceiling_sim.py --kc-inhibition` to re-simulate the Kenyon code under a
+  different APL strength). Run recorder snapshots (`weights_ep*.npz`) and per-run archives
+  are what they read; per-run archives of one wiring can be concatenated with fight ids
+  offset for long-horizon replays.

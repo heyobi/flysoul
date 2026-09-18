@@ -178,6 +178,13 @@ def parse_args():
                              "is undamaged. Disengaging scores exactly zero in SoulsGym, "
                              "which beats any exchange that costs health, so without this "
                              "a well-optimised agent learns to run away and never fight.")
+    parser.add_argument("--learning-rate", type=float, default=None,
+                        help="KC->MBON learning rate (default: CircuitConfig.learning_rate, 0.08). "
+                             "Measured offline on 580 archived fights replayed sequentially "
+                             "(scripts/offline_stability.py): at 0.08 the weights encode roughly "
+                             "the last twenty fights and oscillate (successive 50-fight changes "
+                             "point in opposite directions, held-out knowledge +0.10/+0.13); at "
+                             "0.02 they keep a direction and reach +0.13/+0.14 on both splits.")
     parser.add_argument("--sleep-passes", type=int, default=30,
                         help="How many remembered fights the fly replays through its "
                              "plasticity between episodes, while the game reloads. The "
@@ -185,7 +192,9 @@ def parse_args():
                              "from a replay buffer; this is the biological version of that. "
                              "0 disables sleep.")
     parser.add_argument("--sleep-memory", type=int, default=20,
-                        help="How many recent fights sleep can draw on.")
+                        help="How many recent fights sleep can draw on. Offline, 50 lets the "
+                             "weights accumulate across fights where 20 wanders (travel ratio "
+                             "1.2 vs 0.65); the best-fights-only memory was tested and is harmful.")
     parser.add_argument("--sleep-gain", type=float, default=0.5,
                         help="Learning-rate multiplier during replay, so a pass is a "
                              "consolidation rather than a full new lesson.")
@@ -276,7 +285,7 @@ def build_agent(args, console):
     decoder = MotorDecoder(topology, step_ms=100.0, temperature=args.explore_temperature)
     plasticity = DopaminePlasticity(
         topology,
-        learning_rate=circuit_cfg.learning_rate,
+        learning_rate=args.learning_rate if args.learning_rate else circuit_cfg.learning_rate,
         eligibility_decay=circuit_cfg.eligibility_decay,
     )
 

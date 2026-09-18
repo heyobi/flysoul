@@ -195,7 +195,7 @@ signal, replay of remembered fights between episodes ("sleep"), uniform homeosta
 scaling. There is no trained readout and no scripted policy; `scripts/ablation.py` is
 the check, and `scripts/trend.py` is how progress is read.
 
-**The fly has beaten the boss five times** in roughly 2,800 live episodes:
+**The fly has beaten the boss six times** in roughly 3,200 live episodes:
 
 | when | circuit | configuration | episode of run | fly HP left | steps |
 |---|---|---|---|---|---|
@@ -204,8 +204,9 @@ the check, and `scripts/trend.py` is how progress is read.
 | 09-18 06:07 | original | eligibility 0.80 (later reverted) | 7 | 6% | 68 |
 | 09-18 08:08 | original | exploration temperature 1.5 | 158 | 6% | 65 |
 | 09-18 16:4x | **attack-pattern cells**, fresh weights | γ 0.90, temperature 1.5 | ~65th fight of the new circuit | 6% | 65 |
+| 09-18 19:50 | attack-pattern cells | same, 3x game speed | 565 (fight ~940 of the circuit) | 8% | 59 |
 
-Frames of the fifth victory were recorded (`checkpoints/runs/<run>/clip_ep00006_victory/`).
+Frames of the fifth and sixth victories were recorded (`checkpoints/runs/<run>/clip_ep*_victory/`).
 The win rate is on the order of 1 in 300; the average fight ends with the boss at ~72%
 and the fly dead after ~25 decisions. The SoulsGym author's reference agent (dueling
 double DQN, replay buffer, 3x game speed, several machines) reached a 45% win rate after
@@ -234,8 +235,8 @@ circuit). Learning was restarted from the innate circuit on 2026-09-18 16:03 wit
 neurons. Its first 283 fights: 71.7% boss HP and 5.8 hits per fight against the original
 circuit's 80.6% and 3.8 over its own first 283 (p < 0.0001), with its first victory at
 fight ~65 instead of ~800 — confounded by the other fixes that were already in place,
-but the direction is not in doubt. Within the new circuit, 440 fights show no trend yet
-(slope +0.8 ± 1.3 per 100 fights).
+but the direction is not in doubt. Within the new circuit, 956 fights show no trend
+(slope 0.0 ± 0.4 per 100 fights, halves 72.3% vs 72.4%).
 
 **Offline measurement, before touching the live run.** Every step is archived
 (`checkpoints/runs/<run>/archive.npz`: spikes, action, reinforcement, raw reward, boss
@@ -248,7 +249,15 @@ animation and phase, distance, motor rates, critic values). Tools:
   no local rule can beat, plus a one-shot LSTD critic;
 - `scripts/kc_ceiling_sim.py` — the ceiling of a *different encoder*, by re-simulating
   the circuit on archived contexts;
-- `scripts/offline_shaping.py` — the same score for every reward shaping.
+- `scripts/offline_shaping.py` — the same score for every reward shaping;
+- `scripts/diagnose_learning.py` — where the chain from experience to behaviour breaks:
+  weight trajectory (drift vs random walk), knowledge in the weights vs the ceiling,
+  whether the learned preference reaches the motor pools, and the teaching signal;
+- `scripts/offline_stability.py` — replays archived fights *sequentially* (online pass,
+  then a night of sleep) for a learning configuration and tracks held-out knowledge,
+  the cosine between successive weight changes and travel vs random walk;
+- `scripts/offline_rule_limit.py` — the ceiling's learning curve against training-set
+  size, and credit by executed vs intended compartment.
 
 Findings: the value horizon γ 0.95 → 0.90 took credit assignment from ~0.00 to +0.16 on
 both splits (deployed); eligibility, credit and learning-rate settings made no consistent
@@ -256,6 +265,36 @@ difference; the raw SoulsGym reward assigns credit *against* real outcomes (−0
 damage taken dominates, `--aggression` 8 sits at the top of a plateau that begins at 4,
 and `--impatience` changes nothing (0.00–0.05 identical). Higher aggression trades dodge
 timing for attacking (roll late/early ratio 1.14 → 1.0).
+
+**Why the score is flat: the diagnosis (2026-09-18 evening, 580 archived fights of the
+pattern-cell circuit).** The signal is there: a least-squares readout of the Kenyon code
+predicts the outcome of an action at +0.41 held-out, and reaches +0.20 from only 15
+training fights. The learned weights do carry knowledge and it does reach behaviour:
+the change in MBON drive correlates with pool rates at +0.52 per step, and when the
+executed action is the learned favourite the outcome is better (−0.31 vs −0.43). But the
+weights hold only about a third of the ceiling (+0.14), and they do not accumulate:
+successive 50-fight weight changes point in opposite directions (cosine −0.4 to −0.6),
+the total distance travelled over 400 fights is half of a random walk's, and the mean
+weight of the attack compartment swings 1.0 → 1.6 → 1.1 → 1.5 → 1.2. The same
+oscillation appears when the archived fights are replayed sequentially through the rule
+on a fixed dataset, so it is the rule, not the policy chasing its own consequences. In
+effect the fly remembers its last ~20 fights. Twenty-two configurations were replayed
+over 290 fights and scored on the other 290 (both ways round): a learning rate of 0.02
+(+0.13/+0.14 vs live +0.10/+0.13) and a sleep memory of 50 fights (weights then keep a
+direction) are the only consistent gains; no sleep, no critic, fixed or linear dopamine
+scaling, per-compartment or global dopamine baselines, γ-matched traces, sharper credit
+and wider clip bounds were all worse or equal. A separate finding: 41% of executed
+actions differ from the motor winner, and Boltzmann exploration explains only 2.5% of
+that; the rest is SoulsGym's valid-action mask (attacks and rolls are locked during
+animations, so the circuit's competition runs among walking actions, and "attack won →
+retreat executed" happened 792 times). The remaining gap to the ceiling looks like a
+property of the local three-factor family on this data — a Hebbian sum against a
+perfectly centred outcome reaches +0.22 on the same fights — rather than of any
+parameter. Two of these findings went live on 2026-09-18 at 20:20, at a lossless
+restart: `--learning-rate 0.02` and `--sleep-memory 50` (and `--impatience` dropped,
+having measured as irrelevant). Replaying only the best fights was tested offline and
+is harmful (knowledge ~0 on both splits): the rule learns from the contrast between
+good and bad outcomes, and a memory of wins alone removes it.
 
 **Throughput, measured rather than assumed.** SoulsGym resets by teleporting and
 rewriting health, not through the game's death reload: a reset is 1.6 s. The fight is
@@ -318,6 +357,9 @@ is by type and is presentation, not a claim that the model neuron is that cell.
 - `scripts/supervise.sh` keeps the agent running; `touch STOP` stops it. Kill the agent
   with a pattern anchored to the process path (`pkill -f "^.../venv/bin/python run.py"`);
   an unanchored pattern matches the shell running the command.
+- Live flags since 20:20: `--game --continuous --explore --explore-temperature 1.5 --game-speed 3
+  --aggression 8 --learning-rate 0.02 --sleep-memory 50` (run.json in each run folder
+  records them).
 - Between-fight work: sleep replay runs in a thread while the game resets; the archive is
   written every 10 episodes, weights every 50, clips on victories and near misses
   (boss ≤ 10%).
