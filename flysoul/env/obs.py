@@ -83,6 +83,7 @@ class CombatState:
     boss_attacking: bool = False    # boss is inside an attack animation
     boss_staggered: bool = False    # poise break / parried: the punish window
     boss_anim_time: float = 0.0     # seconds since the boss animation started
+    boss_anim_id: int = -1          # raw SoulsGym animation ID, -1 if unknown
     player_anim_time: float = 0.0   # seconds since the player animation started
     player_can_act: bool = True     # player is not locked inside an animation
     lock_on: bool = True            # camera is locked on to the boss
@@ -123,6 +124,7 @@ def parse_obs(obs: Any, info: dict | None = None) -> CombatState:
         st.boss_hp = float(np.clip(_f(obs.get("boss_hp"), b_max_hp) / b_max_hp, 0.0, 1.0))
 
         st.boss_attacking, st.boss_staggered = _classify_boss_animation(obs.get("boss_animation"))
+        st.boss_anim_id = int(_f(obs.get("boss_animation"), -1.0))
         st.boss_anim_time = _f(obs.get("boss_animation_duration"), 0.0)
         st.player_anim_time = _f(obs.get("player_animation_duration"), 0.0)
         st.lock_on = bool(_f(obs.get("lock_on"), 1.0) > 0.5)

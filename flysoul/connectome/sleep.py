@@ -26,7 +26,16 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
+from flysoul.connectome.graph import ACTION_CHANNELS
+
 OnStep = Callable[[int, int, int, "Transition", int, int], None]
+
+# Per-step context stored alongside the spikes, for offline analysis. Fixed layout so
+# the archive stays a plain matrix.
+EXTRA_NAMES = [
+    "reward_env", "distance", "angle", "player_hp", "boss_hp", "boss_staggered",
+    "player_can_act", "dopamine", "td_error", "value", "boss_anim_id",
+] + [f"rate_{c}" for c in ACTION_CHANNELS]
 
 
 @dataclass
@@ -41,6 +50,7 @@ class Transition:
     attacking: bool = False
     damage_taken: float = 0.0
     hit: float = 0.0
+    extra: Optional[np.ndarray] = None  # EXTRA_NAMES layout, float32
 
 
 @dataclass
@@ -93,11 +103,13 @@ class SleepConsolidation:
 
     def record(self, spike_counts: np.ndarray, channel: Optional[str], reward: float,
                terminal: bool, anim_t: float = 0.0, attacking: bool = False,
-               damage_taken: float = 0.0, hit: float = 0.0) -> None:
+               damage_taken: float = 0.0, hit: float = 0.0,
+               extra: Optional[np.ndarray] = None) -> None:
         spikes = np.clip(np.asarray(spike_counts), 0, 255).astype(np.uint8)
         self._current.append(Transition(
             spikes, channel, float(reward), bool(terminal),
             float(anim_t), bool(attacking), float(damage_taken), float(hit),
+            None if extra is None else np.asarray(extra, dtype=np.float32),
         ))
 
     def end_episode(self) -> int:
@@ -114,7 +126,6 @@ class SleepConsolidation:
 
     def dump(self, path) -> int:
         """Write the archive to an .npz for offline experiments. Returns transitions written."""
-        from flysoul.connectome.graph import ACTION_CHANNELS
         fights = self.archive
         n = sum(len(f) for f in fights)
         if n == 0:
@@ -129,6 +140,7 @@ class SleepConsolidation:
         damage = np.zeros(n, dtype=np.float32)
         hit = np.zeros(n, dtype=np.float32)
         fight = np.zeros(n, dtype=np.int32)
+        extra = np.zeros((n, len(EXTRA_NAMES)), dtype=np.float32)
         i = 0
         for f_id, f in enumerate(fights):
             for tr in f:
@@ -141,11 +153,13 @@ class SleepConsolidation:
                 damage[i] = tr.damage_taken
                 hit[i] = tr.hit
                 fight[i] = f_id
+                if tr.extra is not None and len(tr.extra) == len(EXTRA_NAMES):
+                    extra[i] = tr.extra
                 i += 1
         np.savez_compressed(
             path, spikes=spikes, channel=channel, reward=reward, terminal=terminal,
             anim_t=anim_t, attacking=attacking, damage_taken=damage, hit=hit, fight=fight,
-            channels=np.array(ACTION_CHANNELS),
+            channels=np.array(ACTION_CHANNELS), extra=extra, extra_names=np.array(EXTRA_NAMES),
         )
         return n
 

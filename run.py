@@ -31,7 +31,7 @@ from rich.live import Live
 from flysoul.config import CHECKPOINT_DIR, BioPhysicsConfig, CircuitConfig
 from flysoul.connectome.calibration import _topology_fingerprint, calibrate_or_load
 from flysoul.connectome.engine import ConnectomeEngine
-from flysoul.connectome.graph import build_fly_circuit
+from flysoul.connectome.graph import ACTION_CHANNELS, build_fly_circuit
 from flysoul.connectome.plasticity import DopaminePlasticity
 from flysoul.connectome.sleep import SleepConsolidation
 from flysoul.env.obs import PLAYER_HEADING_OFFSET, parse_obs
@@ -45,6 +45,7 @@ from flysoul.env.souls_wrapper import (
 from flysoul.motor.decoder import SOULSGYM_IDLE, MotorDecoder
 from flysoul.sensory.encoder import SensoryEncoder
 from flysoul.telemetry.dashboard import FlySoulDashboard
+from flysoul.telemetry.recorder import RunRecorder
 from flysoul.visualizer import (
     broadcast_event,
     set_latest_frame,
@@ -290,6 +291,9 @@ def main():
 
     topology, engine, encoder, decoder, plasticity, memory_path = build_agent(args, console)
 
+    recorder = RunRecorder(CHECKPOINT_DIR, args, tag="game" if args.game else "mock")
+    console.print(f"[dim]recording this run to {recorder.dir}[/dim]")
+
     sleep = None
     if not args.no_sleep and not args.no_learning and args.sleep_passes > 0:
         sleep = SleepConsolidation(
@@ -362,14 +366,15 @@ def main():
                 report_camera_alignment(env, console, ep)
             if pending_sleep is not None:
                 # The night ends when the arena is ready; normally it ended long before.
-                finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web, sleep)
+                finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web,
+                             sleep, recorder)
                 pending_sleep = None
             engine.reset_state()
             encoder.reset()
             plasticity.reset()
             settle_connectome(engine, encoder, obs, info)
 
-            summary = run_episode(
+            summary, frames = run_episode(
                 ep=ep,
                 env=env,
                 mock_mode=mock_mode,
@@ -390,8 +395,17 @@ def main():
                 dodge=dodge,
             )
             episode_history.append(summary)
+            recorder.episode(ep, summary)
+            if summary["victory"] or summary["boss_hp_pct"] <= 0.10:
+                clip = recorder.save_frames(
+                    ep, frames, "victory" if summary["victory"] else "near")
+                if clip is not None:
+                    console.print(f"[dim]saved {len(frames)} frames to {clip.name}[/dim]")
+            if ep % 50 == 0:
+                recorder.snapshot_weights(plasticity, ep)
             if ep % 20 == 0:
                 console.print(dodge.summary())
+                recorder.event("dodge_timing", episode=ep, text=dodge.summary())
             if summary["victory"]:
                 victories += 1
             if sleep is not None:
@@ -439,7 +453,8 @@ def main():
             pass
 
     if pending_sleep is not None:
-        finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web, sleep)
+        finish_sleep(pending_sleep, console, plasticity, memory_path, args, enable_web,
+                     sleep, recorder)
     episodes_run = max(1, len(episode_history))
     console.print(
         f"\n[bold cyan]Simulation Finished.[/bold cyan] "
@@ -495,7 +510,8 @@ def start_sleep(sleep, plasticity, enable_web, mock_mode, ep):
     return thread, holder, ep
 
 
-def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sleep_obj=None):
+def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sleep_obj=None,
+                 recorder=None):
     """Wait for the night to end, report it, and save what was consolidated."""
     thread, holder, ep = pending
     thread.join()
@@ -508,9 +524,15 @@ def finish_sleep(pending, console, plasticity, memory_path, args, enable_web, sl
         )
         # Every tenth night, archive the fights for offline experiments and print
         # what they say the credit horizon should be.
+        if recorder is not None:
+            recorder.event("sleep", episode=ep, passes=report.passes,
+                           transitions=report.transitions, duration_s=round(report.duration_s, 2),
+                           weight_shift=round(report.weight_shift, 5),
+                           mean_abs_td=round(report.mean_abs_td, 4))
         if ep % 10 == 0 and sleep_obj is not None:
             try:
-                written = sleep_obj.dump(CHECKPOINT_DIR / "replay_archive.npz")
+                written = (recorder.archive(sleep_obj, ep) if recorder is not None
+                           else sleep_obj.dump(CHECKPOINT_DIR / "replay_archive.npz"))
                 if written:
                     console.print(f"[dim]archived {written} steps from "
                                   f"{len(sleep_obj.archive)} fights for offline replay[/dim]")
@@ -762,6 +784,7 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
     unlocked_steps = 0
     lock_warned = False
     relocks = 0
+    frames: list[bytes] = []
     if sleep is not None:
         sleep.begin_episode()
     step_ms = float(
@@ -806,6 +829,7 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
             prev_boss_hp = state.boss_hp
             prev_player_hp = state.player_hp
             prev_distance = state.distance
+            pre_state = state  # what the fly saw when it decided
             pre_attacking, pre_anim_t = state.boss_attacking, state.boss_anim_time
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
@@ -854,11 +878,20 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                     learning_reward, spike_counts, terminal=bool(terminated or truncated)
                 )
                 if sleep is not None:
+                    extra = np.array(
+                        [reward, pre_state.distance, pre_state.angle, pre_state.player_hp,
+                         pre_state.boss_hp, float(pre_state.boss_staggered),
+                         float(pre_state.player_can_act), float(plasticity.dopamine_level),
+                         float(plasticity.last_td_error), float(plasticity.last_value),
+                         float(pre_state.boss_anim_id)]
+                        + [float(motor_rates.get(c, 0.0)) for c in ACTION_CHANNELS],
+                        dtype=np.float32,
+                    )
                     sleep.record(spike_counts, channel, learning_reward,
                                  bool(terminated or truncated),
                                  anim_t=pre_anim_t, attacking=pre_attacking,
                                  damage_taken=max(0.0, prev_player_hp - state.player_hp),
-                                 hit=boss_damage)
+                                 hit=boss_damage, extra=extra)
 
             global_action_counts[channel] = global_action_counts.get(channel, 0) + 1
             episode_actions[channel] = episode_actions.get(channel, 0) + 1
@@ -898,11 +931,13 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                             "steer towards Iudex."
                         )
 
-            if enable_web:
-                if step % 3 == 0 and not mock_mode:
-                    frame = grab_video_frame(env)
-                    if frame is not None:
+            if step % 3 == 0 and not mock_mode:
+                frame = grab_video_frame(env)
+                if frame is not None:
+                    frames.append(frame)
+                    if enable_web:
                         set_latest_frame(frame)
+            if enable_web:
                 broadcast_event({
                     "episode": ep, "step": step,
                     "player_hp": state.player_hp, "player_sp": state.player_sp,
@@ -949,13 +984,14 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
         if live is not None:
             live.__exit__(None, None, None)
 
-    return {
+    summary = {
         "episode": ep, "steps": step, "reward": round(ep_reward, 2), "hits": hits,
         "actions": episode_actions,
         "boss_hp_pct": round(state.boss_hp, 3), "player_hp_pct": round(state.player_hp, 3),
         "victory": state.boss_hp <= 1e-6,
         "mean_weight": round(float(plasticity.mean_plastic_weight), 4),
     }
+    return summary, frames
 
 
 if __name__ == "__main__":
