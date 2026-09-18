@@ -43,7 +43,14 @@ class DopaminePlasticity:
         scaling_rate: float = 0.02,
         rpe_scale: float = 0.0,
         rpe_baseline_rate: float = 0.02,
-        discount: float = 0.95,
+        # Horizon of the value estimate. 0.90 is about ten steps, one second of the
+        # fight, which is how long the consequences of an action take to arrive here.
+        # Chosen offline (scripts/offline_search.py) on 90 archived fights with a
+        # held-out split: at 0.95 the rule's credit assignment correlated with the real
+        # outcomes at +0.04 / -0.03 on the two splits, at 0.90 at +0.18 / +0.15, at 0.98
+        # negative. The least-squares ceiling on the same fights was +0.33. Every other
+        # parameter the search varied made no consistent difference.
+        discount: float = 0.90,
         critic_lr: float = 0.05,
     ):
         self.topology = topology

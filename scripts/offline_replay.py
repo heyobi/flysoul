@@ -120,7 +120,9 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
-    z = np.load(args.archive)
+    # NpzFile re-reads and decompresses an array on every access; indexing it inside
+    # a loop turns a one-second replay into half an hour. Materialise once.
+    z = {k: v for k, v in np.load(args.archive).items()}
     n, fights = len(z["reward"]), len(np.unique(z["fight"]))
     print(f"archive: {n} steps from {fights} fights; "
           f"{int((z['reward'] > 0).sum())} rewarded, {int((z['reward'] < 0).sum())} punished steps")
