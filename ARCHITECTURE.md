@@ -185,3 +185,48 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority ./venv/bin/python3 run.py --
 
 The first launch runs the homeostatic calibration (about 90 s) and caches it; later runs
 start immediately.
+
+## 6. Learning-loop and tooling additions (2026-09-17/18)
+
+These were added after the first live victories and are documented here so the design
+survives context loss. Each is measured in the README's results section.
+
+- **Decision-time synaptic tag** (`DopaminePlasticity.update_traces`): the eligibility
+  trace is set only on the compartment whose command was just issued, on the Kenyon cells
+  active then. Accumulating it on every compartment every step blamed the cells active
+  *after* an early roll. `tests/test_synaptic_tag.py`.
+- **Uniform homeostatic scaling** (`_homeostatic_scaling`): all KC→MBON synapses scaled
+  by one factor, dead band 0.15. The earlier per-compartment cap pinned five channels at
+  exactly 1/(1−0.35) of baseline and erased learned differences.
+  `tests/test_homeostasis.py`.
+- **Value horizon** γ = 0.90 (`DopaminePlasticity.discount`), chosen offline.
+- **Sleep** (`flysoul/connectome/sleep.py`): fights are recorded and replayed through the
+  same plasticity between episodes (30 passes over the last 20 fights, 0.5× learning
+  rate, capped at 4,000 replayed steps), in a thread while the game resets. Memory
+  persists in `checkpoints/sleep_memory.npz` so restarts forget nothing; a memory recorded
+  on a different wiring is discarded. `tests/test_sleep.py`.
+- **Attack-pattern cells** (`CircuitConfig.num_retina_pattern`, 64): lobula feature
+  detectors, one fixed sparse subset per boss animation, driven by `boss_anim_id`
+  (`CombatState`). They raise the Kenyon-cell outcome-prediction ceiling from +0.26 to
+  +0.38 on archived fights. Changing this count changes the wiring fingerprint and
+  therefore starts learning afresh.
+- **Run recorder** (`flysoul/telemetry/recorder.py`): `checkpoints/runs/<run>/` holds
+  `run.json` (flags, git revision, wiring fingerprint), `episodes.jsonl` (episodes, sleep
+  reports, reset timings, dodge timing), `archive.npz` (every step: spikes, action,
+  shaped reward, raw reward, boss animation/phase, distance, angle, motor rates, critic
+  values), periodic weight snapshots, and JPEG clips of victories and near misses. The
+  learning curve in the visualizer spans every run with the same fingerprint.
+- **Offline tools** (`scripts/offline_*.py`, `kc_ceiling_sim.py`, `trend.py`,
+  `reset_timing.py`): see README "Offline measurement". Rule: nothing goes live without
+  beating the live setting on both held-out splits.
+- **Exploration** `--explore-temperature` (live 1.5, ~85% of decisions are the circuit's
+  own winner); **game speed** `--game-speed 3` (fights are ~70% of wall time because
+  SoulsGym advances animation-locked steps in game time).
+- **Visualizer**: real MaleCNS somata and skeletons (`flysoul/visualizer/malecns.json`
+  from `scripts/fetch_malecns.py`, mapped by cell type in `web_server._map_to_malecns`),
+  arena panel (decision as movement), sleep state, whole-circuit trend chart with
+  statistics, 10 fps frame polling that survives server restarts.
+- **Camera/lock-on**: the patched `_camera_reset` in soulsgym turns the camera towards
+  the boss (not the body) with a timeout; `run.ensure_lock_on` re-locks mid-fight after
+  three unlocked steps; `recover_game_window` closes Steam Big Picture and refocuses the
+  game when a reset fails.
