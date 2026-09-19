@@ -313,7 +313,12 @@ vs winning. A second probe fitted to the aggression-weighted learning reward ins
 (held-out +0.46, the signal the fly actually chases) did the same over 120 fights:
 76–82% boss HP, 3.5–4.7 hits, no victory. Neither readout of this Kenyon code, fitted
 on 980 fights of data, plays better than the synapses the fly learned itself. The probe
-weights were discarded and the learned checkpoint restored.
+weights were discarded and the learned checkpoint restored. Two more in-brain levers were
+then measured and found empty: a conjunction code for attack × phase in the pattern cells
+(re-simulated KC ceiling +0.32–0.34 against +0.33 live; exact cell groups are worse), a
+wider mushroom body (1,536 / 2,048 Kenyon cells: +0.33 / +0.34), and a motor decoder
+that holds still when the winning pool is not executable instead of running the best
+executable one (live A/B, 315 vs 381 fights: 72.4% vs 72.2%, p = 0.87).
 
 **Throughput, measured rather than assumed.** SoulsGym resets by teleporting and
 rewriting health, not through the game's death reload: a reset is 1.6 s. The fight is
@@ -370,6 +375,41 @@ is by type and is presentation, not a claim that the model neuron is that cell.
   restart overwrote the file; the run recorder (`flysoul/telemetry/recorder.py`) now
   writes per-run folders, sleep memory persists across restarts, and restarts are
   lossless.
+
+## 🧪 3b — a synthetic readout, kept apart (from 2026-09-19)
+
+After every measurable lever inside the brain came back empty, the project added one
+thing that is **not** the fly's learning and is labelled as such everywhere: a linear Q
+function over the fly's own Kenyon cell code, fitted *outside the brain* by least-squares
+Q-iteration on the archived fights (`scripts/fit_q_readout.py`, `flysoul/synthetic/`),
+and run live with `run.py --synthetic-q`. When it is on, it chooses the action; the
+biological circuit still produces the sensory code, its learned synapses are loaded only
+to report how often the two agree, and are never updated or saved. Such runs carry the
+fingerprint `3b`, have their own learning curve, and show a magenta "3b · SYNTHETIC
+READOUT" card in the visualizer. Results from 3b runs are reported separately from the
+fly's, and never in the victory table above. First readout: fitted on 1,670 fights,
+γ 0.90, Bellman RMSE 0.26 held-out, agrees with the fly's own choice on 31% of steps.
+It is refitted every ~150 fights on all data including its own. Rounds so far (boss HP
+left): 72%, 70%, 70%, 67.5%; the fourth round beats the fly's own plateau for the first
+time (67.5% vs 72.2% over 157 vs 381 fights, p = 0.005, 6.7 vs 5.7 hits). Two victories
+under the synthetic readout (episode 12 of round 1b, 115 steps, 3% HP; episode 22 of
+round 4, 80 steps, a mutual kill) are listed here, not above. The Kenyon-only linear
+readout converged at ~68% over rounds 4–6. Round 7 replaced the Kenyon code with the
+binned raw game state (`flysoul/synthetic/features.py`, 366 one-hot features: attack ×
+phase, distance, angle, health, previous action): 65.8% over 150 fights, 6.9 hits, twice
+the survival (51 decisions), a third synthetic victory; +6.3 points over the fly
+(p = 0.0002) and +2.6 over the Kenyon-only readout (p = 0.20, not yet significant).
+Round 8, refitted with round 7's own fights: 54.6% boss HP, 9.1 hits, 52 decisions, one
+more synthetic victory; +17.5 points over the fly and +11.4 over round 7 (both p < 10⁻⁴).
+The synthetic readout learns from the same data volume the fly had; what differs is the
+objective (Q-iteration), the batch fit, and the raw state. Rounds 9 and 10 (59.6%, 55.6%;
+8–9 hits; five more synthetic victories, about one per 60 fights) suggest the linear
+raw-state readout plateaus around 55–60% boss HP. Rounds 11–12: 56.0% and 53.8%, 9 hits,
+four more synthetic victories (now one in about 50 fights; the best left the fly at 46% HP).
+Round 15 added the player's stamina to the state and cut exploration to ε = 0.02: 50.6% boss
+HP, 9.8 hits and nine victories in 154 fights (one in 17; the cleanest left the fly at 73%
+HP). A two-layer network on the same features (round 14) was not better than the linear
+readout, and the training horizon (γ 0.90 vs 0.95) made no difference.
 
 ## 🛠 Operating the live run
 

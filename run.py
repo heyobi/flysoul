@@ -207,6 +207,13 @@ def parse_args():
     parser.add_argument("--hold-when-blocked", action="store_true",
                         help="If the pool that won cannot be executed now (animation lock), hold still "
                              "instead of executing the best executable pool. Live A/B from 2026-09-19.")
+    parser.add_argument("--synthetic-q", default=None,
+                        help="3b SYNTHETIC: let a Q readout fitted outside the brain "
+                             "(scripts/fit_q_readout.py) choose the action instead of the mushroom "
+                             "body. The biological circuit still runs and is recorded; its synapses "
+                             "are never updated or saved; the run is fingerprinted '3b'.")
+    parser.add_argument("--synthetic-epsilon", type=float, default=0.05,
+                        help="3b: probability of a random executable action per step.")
     parser.add_argument("--probe-weights", default=None,
                         help="DIAGNOSTIC: load KC->MBON synapses from this file (e.g. a least-squares "
                              "fit from scripts/fit_probe_weights.py) and run with learning, sleep and "
@@ -336,6 +343,19 @@ def main():
     console.print("[bold cyan]Initializing FlySoul: MaleCNS v1.0 Fruit Fly Connectome Engine...[/bold cyan]")
 
     topology, engine, encoder, decoder, plasticity, memory_path = build_agent(args, console)
+    synthetic = None
+    if args.synthetic_q:
+        from flysoul.synthetic.q_readout import SyntheticQ
+        synthetic = SyntheticQ(args.synthetic_q, topology.kenyon_indices,
+                               epsilon=args.synthetic_epsilon, seed=args.seed)
+        # The fly's learned synapses stay loaded for comparison but are never touched.
+        memory_path = CHECKPOINT_DIR / "learned_3b.npz"
+        args.no_learning = True
+        args.no_memory = True
+        console.print(f"[bold magenta]3b SYNTHETIC READOUT[/bold magenta]: {synthetic.source} "
+                      f"(fitted on {synthetic.fitted_on} archived fights, gamma {synthetic.gamma:g}) chooses "
+                      "the action; the mushroom body is shadowed, its synapses frozen. Fingerprint '3b'.")
+    args._synthetic = synthetic
 
     # The wiring's fingerprint, not the learned state's: the checkpoint is named after
     # it, and the learned weights (already loaded into the topology here) would give
@@ -343,13 +363,15 @@ def main():
     fingerprint = memory_path.stem.split("_", 1)[1]
     recorder = RunRecorder(CHECKPOINT_DIR, args, tag="game" if args.game else "mock",
                            fingerprint=fingerprint)
-    prior_boss, prior_hits = ([], []) if args.no_memory else RunRecorder.prior_series(CHECKPOINT_DIR, fingerprint)
+    # 3b runs keep no synaptic memory but do form one series under their own fingerprint.
+    prior_boss, prior_hits = (([], []) if (args.no_memory and not args.synthetic_q)
+                              else RunRecorder.prior_series(CHECKPOINT_DIR, fingerprint))
     if prior_boss:
         console.print(f"[dim]{len(prior_boss)} earlier fights on this circuit will be shown in the learning curve[/dim]")
     console.print(f"[dim]recording this run to {recorder.dir}[/dim]")
 
     sleep = None
-    if not args.no_sleep and not args.no_learning and args.sleep_passes > 0:
+    if not args.no_sleep and (not args.no_learning or args.synthetic_q) and args.sleep_passes > 0:
         sleep = SleepConsolidation(
             memory_episodes=args.sleep_memory, passes=args.sleep_passes,
             gain=args.sleep_gain, seed=args.seed,
@@ -488,7 +510,13 @@ def main():
                 recorder.event("dodge_timing", episode=ep, text=dodge.summary())
             if summary["victory"]:
                 victories += 1
-            if sleep is not None:
+            if sleep is not None and args.synthetic_q:
+                # 3b: no consolidation (nothing biological is learning); the fights are
+                # filed and archived for the next offline fit and for the record.
+                sleep.end_episode()
+                if ep % 10 == 0:
+                    recorder.archive(sleep, ep)
+            elif sleep is not None:
                 # Consolidate while the game reloads. That is dead time otherwise, and it
                 # is also when the fly's own brain does this.
                 pending_sleep = start_sleep(sleep, plasticity, enable_web, mock_mode, ep,
@@ -920,11 +948,27 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
             channel, motor_rates = decoder.decode(
                 spike_counts, explore=args.explore, valid_channels=valid_channels
             )
+            mb_channel = channel
+            synthetic = getattr(args, "_synthetic", None)
+            forced_action = None
+            if synthetic is not None:
+                # 3b: the synthetic readout decides; the mushroom body's choice is kept
+                # only to report how often the two agree. A directional roll is issued
+                # to the game directly; the efference copy still says "roll".
+                if step == 1:
+                    synthetic.new_fight()
+                chosen, _ = synthetic.act(spike_counts, valid_channels, mb_winner=mb_channel, state=state)
+                from flysoul.synthetic.actions import game_action_id, to_channel
+                channel = to_channel(chosen)
+                if chosen.startswith("roll_"):
+                    forced_action = game_action_id(chosen)
 
             # 4. Translate that into a game action and step the world.
             action, channel = decoder.to_game_action(
                 channel, motor_rates, mock=mock_mode, lock_on=state.lock_on
             )
+            if forced_action is not None and channel == "roll" and not mock_mode:
+                action = forced_action
             prev_boss_hp = state.boss_hp
             prev_player_hp = state.player_hp
             prev_distance = state.distance
@@ -983,14 +1027,16 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                 plasticity.apply_reinforcement(
                     learning_reward, spike_counts, terminal=bool(terminated or truncated)
                 )
-                if sleep is not None:
+            if sleep is not None and (not args.no_learning or synthetic is not None):
+                if True:
                     extra = np.array(
                         [reward, pre_state.distance, pre_state.angle, pre_state.player_hp,
                          pre_state.boss_hp, float(pre_state.boss_staggered),
                          float(pre_state.player_can_act), float(plasticity.dopamine_level),
                          float(plasticity.last_td_error), float(plasticity.last_value),
                          float(pre_state.boss_anim_id)]
-                        + [float(motor_rates.get(c, 0.0)) for c in ACTION_CHANNELS],
+                        + [float(motor_rates.get(c, 0.0)) for c in ACTION_CHANNELS]
+                        + [float(pre_state.player_sp), float(action)],
                         dtype=np.float32,
                     )
                     sleep.record(spike_counts, channel, learning_reward,
@@ -1074,6 +1120,7 @@ def run_episode(*, ep, env, mock_mode, engine, encoder, decoder, plasticity, top
                     "total_ltd": plasticity.total_ltd_events,
                     "action_counts": global_action_counts,
                     "history": episode_history[-20:],
+                    "synthetic": synthetic.report(mb_channel) if synthetic is not None else None,
                 })
 
             if live is not None:

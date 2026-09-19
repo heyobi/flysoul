@@ -36,7 +36,7 @@ OnStep = Callable[[int, int, int, "Transition", int, int], None]
 EXTRA_NAMES = [
     "reward_env", "distance", "angle", "player_hp", "boss_hp", "boss_staggered",
     "player_can_act", "dopamine", "td_error", "value", "boss_anim_id",
-] + [f"rate_{c}" for c in ACTION_CHANNELS]
+] + [f"rate_{c}" for c in ACTION_CHANNELS] + ["player_sp", "action_id"]
 
 
 @dataclass

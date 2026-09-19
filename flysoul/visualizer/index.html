@@ -338,6 +338,15 @@
       <span id="arena-phase">boss idle</span></div>
   </section>
 
+
+  <!-- 3b: synthetic readout (only shown when the run is a 3b run) -->
+  <section class="card" id="synth" style="display:none;border:1px solid rgba(236,72,153,0.55)">
+    <div class="eyebrow row" style="color:#f472b6"><span>3b · SYNTHETIC READOUT · not the fly's learning</span><span class="num" id="synth-agree">—</span></div>
+    <div style="font-size:12px;opacity:0.85;margin:4px 0 8px">A Q function fitted <b>outside the brain</b> on archived fights chooses the action.
+      The mushroom body is shadowed and its synapses are frozen; this run is recorded under its own fingerprint.
+      <span id="synth-src"></span></div>
+    <div id="synth-rows"></div>
+  </section>
   <!-- progress -->
   <section class="card" id="progress">
     <div class="eyebrow row"><span>Learning · this circuit</span><span class="num" id="ep-count">0 episodes</span></div>
@@ -947,6 +956,76 @@ function drawArena() {
   if (sleeping) { x.fillStyle = 'rgba(99,102,241,0.12)'; x.fillRect(0, 0, w, h); }
 }
 
+// ---- 3b: the synthetic readout, drawn OUTSIDE the brain -------------------------
+// Only appears when the run is a 3b run. A magenta wire box beside the CNS holds one
+// node per action (brightness = its Q value); a line runs from the chosen node to the
+// descending pool it drives. Nothing in it is a neuron of the fly.
+let synthGroup = null, synthNodes = {}, synthLine = null, poolCentroid = {};
+function buildSynth(sy) {
+  if (synthGroup || !points) return;
+  const acc = {};
+  for (let i = 0; i < N; i++) { const l = labels[i] || ''; if (l.startsWith('Motor_')) { const c = l.slice(6); (acc[c] = acc[c] || []).push(coords[i]); } }
+  for (const c in acc) { const m = [0, 0, 0]; for (const q of acc[c]) for (let a = 0; a < 3; a++) m[a] += q[a] / acc[c].length; poolCentroid[c] = new THREE.Vector3(m[0], m[1], m[2]); }
+  const bb = new THREE.Box3().setFromBufferAttribute(points.geometry.attributes.position);
+  const size = new THREE.Vector3(); bb.getSize(size); const ctr = new THREE.Vector3(); bb.getCenter(ctr);
+  synthGroup = new THREE.Group();
+  const w = size.x * 0.42, h = Math.max(8, size.y * 0.05), dp = Math.max(8, size.z * 0.2);
+  // left of the CNS, inside the framed view (the right side is where the camera fit ends)
+  // beside the nerve cord, below the brain: the strip of the scene the side panels do not cover
+  const base = new THREE.Vector3(ctr.x + size.x * 0.42, ctr.y - size.y * 0.12, ctr.z);
+  const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, dp)),
+    new THREE.LineBasicMaterial({ color: 0xf472b6, transparent: true, opacity: 0.85 }));
+  box.position.copy(base); synthGroup.add(box);
+  const acts = Object.keys((sy && sy.q) || {});
+  if (!acts.length) return;
+  acts.forEach((a, i) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(Math.max(1.5, h * 0.25), 12, 10),
+      new THREE.MeshBasicMaterial({ color: 0xf472b6, transparent: true, opacity: 0.3 }));
+    m.position.set(base.x - w / 2 + (i + 0.5) * w / acts.length, base.y, base.z);
+    synthGroup.add(m); synthNodes[a] = m;
+  });
+  const cv = document.createElement('canvas'); cv.width = 768; cv.height = 72; const cx = cv.getContext('2d');
+  cx.fillStyle = '#f472b6'; cx.font = 'bold 30px Inter, Arial, sans-serif';
+  cx.fillText('3b · SYNTHETIC Q NETWORK · outside the brain', 8, 48);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false }));
+  sp.scale.set(w * 1.15, w * 1.15 * 72 / 768, 1); sp.position.set(base.x, base.y + h * 2.2, base.z); synthGroup.add(sp);
+  const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+  synthLine = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xf472b6, transparent: true, opacity: 0.9 }));
+  synthGroup.add(synthLine);
+  // hidden layer of the network (when the readout has one): a row of small nodes above the
+  // action nodes, lit by activation; a network, not neurons
+  if (sy && sy.hidden && sy.hidden.length) {
+    const nh = sy.hidden.length; synthHidden = [];
+    for (let i = 0; i < nh; i++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.9, h * 0.12), 8, 6),
+        new THREE.MeshBasicMaterial({ color: 0xf9a8d4, transparent: true, opacity: 0.25 }));
+      m.position.set(base.x - w / 2 + (i + 0.5) * w / nh, base.y + h * 1.1, base.z);
+      synthGroup.add(m); synthHidden.push(m);
+    }
+  }
+  scene.add(synthGroup);
+}
+let synthHidden = [];
+function updateSynth(sy) {
+  buildSynth(sy); if (!synthGroup) return;
+  const qs = sy.q || {}; const vals = Object.values(qs);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  for (const a in synthNodes) {
+    const v = qs[a]; const t = (hi > lo && v !== undefined) ? (v - lo) / (hi - lo) : 0;
+    synthNodes[a].material.opacity = 0.15 + 0.85 * t; synthNodes[a].scale.setScalar(0.6 + t * 1.2);
+    synthNodes[a].material.color.set(a === sy.chosen ? 0xffffff : 0xf472b6);
+  }
+  if (sy.hidden && synthHidden.length === sy.hidden.length) {
+    sy.hidden.forEach((v, i) => { synthHidden[i].material.opacity = 0.12 + 0.88 * v; synthHidden[i].scale.setScalar(0.6 + 1.0 * v); });
+  }
+  const from = synthNodes[sy.chosen], to = poolCentroid[(sy.chosen || '').startsWith('roll_') ? 'roll' : sy.chosen];
+  if (from && to) {
+    const p = synthLine.geometry.attributes.position;
+    p.setXYZ(0, from.position.x, from.position.y, from.position.z); p.setXYZ(1, to.x, to.y, to.z); p.needsUpdate = true;
+    synthLine.visible = true;
+  } else synthLine.visible = false;
+}
+
 const src = new EventSource('/api/stream');
 src.onopen = () => setLive(true, 'live connectome');
 src.onerror = () => setLive(false, 'reconnecting');
@@ -972,6 +1051,25 @@ src.onmessage = e => {
     return;
   }
 
+  if (d.synthetic) {
+    const sy = d.synthetic, card = $('synth');
+    card.style.display = 'block';
+    $('synth-agree').textContent = `agrees with MB ${Math.round((sy.agreement || 0) * 100)}%`;
+    $('synth-src').textContent = `${sy.source} · fitted on ${sy.fitted_on_fights} fights · γ ${sy.gamma}`;
+    const qs = Object.entries(sy.q || {});
+    const lo = Math.min(...qs.map(e => e[1])), hi = Math.max(...qs.map(e => e[1]));
+    $('synth-rows').innerHTML = qs.map(([a, v]) => {
+      const w = hi > lo ? Math.round(100 * (v - lo) / (hi - lo)) : 0;
+      const chosen = a === sy.chosen, mb = a === sy.mb_winner;
+      return `<div class="pool-row" style="display:flex;align-items:center;gap:8px;font-size:12px;margin:2px 0">
+        <span style="width:96px;${chosen ? 'color:#f472b6;font-weight:600' : ''}">${a}${mb ? ' <i title="mushroom body winner" style="opacity:.7">MB</i>' : ''}</span>
+        <span style="flex:1;height:6px;background:rgba(255,255,255,0.08);border-radius:3px"><i style="display:block;height:6px;width:${w}%;background:${chosen ? '#f472b6' : 'rgba(244,114,182,0.35)'};border-radius:3px"></i></span>
+        <span class="num" style="width:52px;text-align:right">${v.toFixed(2)}</span></div>`;
+    }).join('');
+    const lt = $('lower-third'); if (lt) lt.style.borderColor = 'rgba(236,72,153,0.55)';
+    const ce = $('cmd-eyebrow'); if (ce) ce.textContent = '3b synthetic command · the mushroom body only watches';
+    updateSynth(sy);
+  }
   if (d.episode !== undefined) $('step').textContent = `episode ${d.episode} · step ${d.step ?? 0}`;
   if (d.active_neurons !== undefined) $('spikes').textContent = `${d.active_neurons.toLocaleString()} spikes`;
   if (d.cumulative_reward !== undefined) $('reward').textContent = (d.cumulative_reward >= 0 ? '+' : '') + d.cumulative_reward.toFixed(2);
