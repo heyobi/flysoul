@@ -7,11 +7,11 @@
 [![SoulsGym](https://img.shields.io/badge/environment-SoulsGym%20(DS3)-red.svg)](https://github.com/amacati/SoulsGym)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-*Can a fruit fly beat Iudex Gundyr?*
+*Can a fruit fly beat Iudex Gundyr?* — It can, once in ~600 fights, and it does not learn to. A synthetic readout on its sensory stream wins one fight in three.
 
 **An embodied bio-connectomic AI agent controlling combat in Dark Souls III using Google Research & HHMI Janelia's complete MaleCNS v1.0 fruit fly connectome.**
 
-[Quickstart](#-quickstart) • [Architecture](#-architecture) • [How it Works](#-how-it-works) • [Scientific References](#-scientific-references)
+[Results](#-results-as-of-2026-09-19-night) • [Quickstart](#-quickstart) • [How it Works](#-how-it-works) • [3b, synthetic](#3b-synthetic-from-6-to-32-wins-in-a-day) • [References](#-scientific-references)
 
 </div>
 
@@ -187,249 +187,152 @@ FlySoul includes a terminal user interface powered by `rich`:
 
 ---
 
-## 📈 Results so far, honestly (as of 2026-09-18, evening)
+## 📈 Results (as of 2026-09-19, night)
 
-Everything below is from the live game (SoulsGym, Iudex Gundyr). All learning happens
-inside the circuit: KC→MBON three-factor plasticity with a temporal-difference dopamine
-signal, replay of remembered fights between episodes ("sleep"), uniform homeostatic
-scaling. There is no trained readout and no scripted policy; `scripts/ablation.py` is
-the check, and `scripts/trend.py` is how progress is read.
+Two things were tried against Iudex Gundyr, and they are reported separately because
+they are different claims.
 
-**The fly has beaten the boss eight times** in roughly 3,550 live episodes:
-
-| when | circuit | configuration | episode of run | fly HP left | steps |
+| | what chooses the action | learns how | fights | victories | best 100-fight stretch |
 |---|---|---|---|---|---|
-| 09-17 23:26 | original | `--aggression 8`, sleep, uniform homeostasis | 16 | 13% | 82 |
-| 09-18 03:10 | original | + `--impatience 0.02`, credit decay 0.90 | 283 | 6% | 74 |
-| 09-18 06:07 | original | eligibility 0.80 (later reverted) | 7 | 6% | 68 |
-| 09-18 08:08 | original | exploration temperature 1.5 | 158 | 6% | 65 |
-| 09-18 16:4x | **attack-pattern cells**, fresh weights | γ 0.90, temperature 1.5 | ~65th fight of the new circuit | 6% | 65 |
-| 09-18 19:50 | attack-pattern cells | same, 3x game speed | 565 (fight ~940 of the circuit) | 8% | 59 |
-| 09-18 21:1x | attack-pattern cells | learning rate 0.02, sleep memory 50 | 263 (fight ~1,220 of the circuit) | 9% | 72 |
-| 09-18 21:3x | attack-pattern cells | same | 312 | 17% | 66 |
+| **The fly** | the MaleCNS-derived circuit's own descending pools | dopamine plasticity on KC→MBON synapses, inside the circuit | ~5,150 | **8** (0.16%) | boss left at 72%, 6 hits, 25 decisions |
+| **3b, synthetic** | a Q network fitted *outside* the brain on the archived fights | offline Double-DQN, refit every ~100 fights | 4,309 | **265** (6% overall; **32%** in the latest round) | boss left at 26%, 13 hits, 90 decisions, 35 wins in 109 |
 
-Frames of the fifth to eighth victories were recorded (`checkpoints/runs/<run>/clip_ep*_victory/`).
-The win rate is on the order of 1 in 300; the average fight ends with the boss at ~72%
-and the fly dead after ~25 decisions. The SoulsGym author's reference agent (dueling
-double DQN, replay buffer, 3x game speed, several machines) reached a 45% win rate after
-about five million environment samples; this project has seen about 70 thousand.
+The first line is the project's question and its honest answer: the fly circuit can beat
+the boss, and does so about once in six hundred fights, but it does not *learn to beat
+it*. The second line is what it took to win reliably, and it is not the fly's learning.
+
+<p align="center">
+  <img src="media/victory_3b_1x_clip.gif" width="480" alt="3b synthetic readout finishing Iudex Gundyr at normal game speed"><br>
+  <sub>3b synthetic readout, normal game speed, the last 12 s of a 35-second win (full clip: <code>media/victory_3b_1x_2026-09-19.mp4</code>). Not the fly's own learning.</sub>
+</p>
+
+### The fly: eight victories, no learning curve
+
+All learning is inside the circuit: KC→MBON three-factor plasticity with a temporal-
+difference dopamine signal, replay of remembered fights between episodes ("sleep"),
+uniform homeostatic scaling. No trained readout, no scripted policy; `scripts/ablation.py`
+is the check and `scripts/trend.py` is how progress is read.
+
+| when (2026) | circuit | configuration | fly HP left | decisions |
+|---|---|---|---|---|
+| 09-17 23:26 | original | `--aggression 8`, sleep, uniform homeostasis | 13% | 82 |
+| 09-18 03:10 | original | + `--impatience 0.02`, credit decay 0.90 | 6% | 74 |
+| 09-18 06:07 | original | eligibility 0.80 (later reverted) | 6% | 68 |
+| 09-18 08:08 | original | exploration temperature 1.5 | 6% | 65 |
+| 09-18 16:4x | **attack-pattern cells**, fresh weights | γ 0.90, temperature 1.5 | 6% | 65 |
+| 09-18 19:50 | attack-pattern cells | 3x game speed | 8% | 59 |
+| 09-18 21:1x | attack-pattern cells | learning rate 0.02, sleep memory 50 | 9% | 72 |
+| 09-18 21:3x | attack-pattern cells | same | 17% | 66 |
+
+The average fight ends with the boss at ~72% and the fly dead after ~25 decisions, and
+that number did not move: 1,720 fights of the pattern-cell circuit have a slope of
+0.0 ± 0.4 points per 100 fights. The SoulsGym author's reference agent (dueling double
+DQN, replay buffer, several machines) reached a 45% win rate after about five million
+environment samples; the fly saw about 130 thousand.
 
 **How progress is read.** Single fights scatter by ±18 points of boss HP, so a 50-fight
 block mean has a standard error of 2.6 and two blocks differ by chance up to ~7 points.
 `scripts/trend.py` (and the "every fight this circuit has had" chart in the visualizer)
 report the least-squares slope with its 95% interval and a first-half/second-half
-Mann-Whitney test; a change counts as progress only when the interval excludes zero or
-p < 0.05. Detecting a 5-point improvement between two configurations needs ~200 fights
-per arm; 3 points needs ~560.
+Mann-Whitney test; a change counts only when the interval excludes zero or p < 0.05.
 
-**The circuits.** The original circuit plateaued at 71–78% boss HP over ~2,000 fights
-regardless of nine single-parameter interventions. Its learned KC→MBON weights did move
-sensibly (retreat +98% → −51%, roll −76% → −4%, advance −75% → −30%; punishments per
-reward 6:1 → 3:1) but the score did not follow. The least-squares ceiling explained
-why: on 300 archived fights, the best linear readout of the Kenyon cell code predicted
-the outcome of an action at Spearman +0.26, while "which attack the boss is performing,
-at which phase" predicted it at +0.39 — information the telegraph bank, which tiles time
-since the swing began identically for all 25 attacks, never gave the mushroom body.
-Sixty-four attack-pattern cells (each animation drives a fixed sparse subset, the way a
-lobula columnar type answers one visual motion pattern) raise the simulated KC ceiling to
-+0.38 (`scripts/kc_ceiling_sim.py`, which re-encodes archived fights through the real
-circuit). Learning was restarted from the innate circuit on 2026-09-18 16:03 with 2,326
-neurons. Its first 283 fights: 71.7% boss HP and 5.8 hits per fight against the original
-circuit's 80.6% and 3.8 over its own first 283 (p < 0.0001), with its first victory at
-fight ~65 instead of ~800 — confounded by the other fixes that were already in place,
-but the direction is not in doubt. Within the new circuit, 956 fights show no trend
-(slope 0.0 ± 0.4 per 100 fights, halves 72.3% vs 72.4%).
+**Why it is flat: the diagnosis.** Every step of every fight is archived (spikes,
+action, reinforcement, raw reward, boss animation and phase, distance, motor rates,
+critic values), and the chain from experience to behaviour was measured link by link
+(`scripts/diagnose_learning.py`, `scripts/offline_stability.py`, `scripts/offline_rule_limit.py`):
 
-**Offline measurement, before touching the live run.** Every step is archived
-(`checkpoints/runs/<run>/archive.npz`: spikes, action, reinforcement, raw reward, boss
-animation and phase, distance, motor rates, critic values). Tools:
+- *The signal is there.* A least-squares readout of the Kenyon-cell code predicts the
+  outcome of an action at Spearman +0.41 held-out, and reaches +0.20 from only 15 fights.
+- *The synapses carry some of it and it reaches behaviour.* The learned change in MBON
+  drive correlates with the descending pool rates at +0.52; when the executed action is
+  the learned favourite the outcome is better (−0.31 vs −0.43).
+- *But the weights do not accumulate.* Successive 50-fight weight changes point in
+  opposite directions (cosine −0.4 to −0.6); over 400 fights the weights travel half as
+  far as a random walk. Replaying archived fights sequentially through the rule on a
+  fixed dataset shows the same oscillation, so it is the rule, not the policy chasing its
+  own consequences: the fly effectively remembers its last twenty fights. Of 22 rule
+  configurations replayed offline, only a lower learning rate (0.02) and a longer sleep
+  memory (50 fights) helped, and live they were worth 1–2 points.
+- *The ceiling does not win either.* Loading the least-squares readout itself into the
+  circuit (a diagnostic, `run.py --probe-weights`, never a result) gave a cautious fly
+  that survived longer, hit less and left the boss at 79–86%. The label every offline
+  score predicts (hit within three steps vs damage taken) is dominated by damage
+  avoidance; the fly's own on-policy learning beat that static readout.
+- *The sensory code is the wall that remains.* The raw game state predicts outcomes at
+  +0.47 against +0.39 for the Kenyon code, almost all of it in "which attack, which
+  phase". Re-simulating the circuit with conjunction cells for attack × phase, a stronger
+  APL, a lower sparsity target or 2,048 Kenyon cells recovered none of it (ceilings
+  +0.32–0.34 against +0.33 live). A decoder that holds still when the winning pool is
+  not executable, instead of running the best executable one, made no difference live
+  (72.4% vs 72.2%, p = 0.87).
 
-- `scripts/offline_replay.py` — replay a candidate plasticity rule over real fights;
-- `scripts/offline_search.py` — score rule settings by whether, on held-out fights,
-  they raised the drive of actions that worked and lowered it where they failed;
-- `scripts/offline_ceiling.py` — the same mapping fitted by least squares: the ceiling
-  no local rule can beat, plus a one-shot LSTD critic;
-- `scripts/kc_ceiling_sim.py` — the ceiling of a *different encoder*, by re-simulating
-  the circuit on archived contexts;
-- `scripts/offline_shaping.py` — the same score for every reward shaping;
-- `scripts/diagnose_learning.py` — where the chain from experience to behaviour breaks:
-  weight trajectory (drift vs random walk), knowledge in the weights vs the ceiling,
-  whether the learned preference reaches the motor pools, and the teaching signal;
-- `scripts/offline_stability.py` — replays archived fights *sequentially* (online pass,
-  then a night of sleep) for a learning configuration and tracks held-out knowledge,
-  the cosine between successive weight changes and travel vs random walk;
-- `scripts/offline_rule_limit.py` — the ceiling's learning curve against training-set
-  size, and credit by executed vs intended compartment.
-
-Findings: the value horizon γ 0.95 → 0.90 took credit assignment from ~0.00 to +0.16 on
-both splits (deployed); eligibility, credit and learning-rate settings made no consistent
-difference; the raw SoulsGym reward assigns credit *against* real outcomes (−0.10) because
-damage taken dominates, `--aggression` 8 sits at the top of a plateau that begins at 4,
-and `--impatience` changes nothing (0.00–0.05 identical). Higher aggression trades dodge
-timing for attacking (roll late/early ratio 1.14 → 1.0).
-
-**Why the score is flat: the diagnosis (2026-09-18 evening, 580 archived fights of the
-pattern-cell circuit).** The signal is there: a least-squares readout of the Kenyon code
-predicts the outcome of an action at +0.41 held-out, and reaches +0.20 from only 15
-training fights. The learned weights do carry knowledge and it does reach behaviour:
-the change in MBON drive correlates with pool rates at +0.52 per step, and when the
-executed action is the learned favourite the outcome is better (−0.31 vs −0.43). But the
-weights hold only about a third of the ceiling (+0.14), and they do not accumulate:
-successive 50-fight weight changes point in opposite directions (cosine −0.4 to −0.6),
-the total distance travelled over 400 fights is half of a random walk's, and the mean
-weight of the attack compartment swings 1.0 → 1.6 → 1.1 → 1.5 → 1.2. The same
-oscillation appears when the archived fights are replayed sequentially through the rule
-on a fixed dataset, so it is the rule, not the policy chasing its own consequences. In
-effect the fly remembers its last ~20 fights. Twenty-two configurations were replayed
-over 290 fights and scored on the other 290 (both ways round): a learning rate of 0.02
-(+0.13/+0.14 vs live +0.10/+0.13) and a sleep memory of 50 fights (weights then keep a
-direction) are the only consistent gains; no sleep, no critic, fixed or linear dopamine
-scaling, per-compartment or global dopamine baselines, γ-matched traces, sharper credit
-and wider clip bounds were all worse or equal. A separate finding: 41% of executed
-actions differ from the motor winner, and Boltzmann exploration explains only 2.5% of
-that; the rest is SoulsGym's valid-action mask (attacks and rolls are locked during
-animations, so the circuit's competition runs among walking actions, and "attack won →
-retreat executed" happened 792 times). The remaining gap to the ceiling looks like a
-property of the local three-factor family on this data — a Hebbian sum against a
-perfectly centred outcome reaches +0.22 on the same fights — rather than of any
-parameter. Two of these findings went live on 2026-09-18 at 20:20, at a lossless
-restart: `--learning-rate 0.02` and `--sleep-memory 50` (and `--impatience` dropped,
-having measured as irrelevant). Replaying only the best fights was tested offline and
-is harmful (knowledge ~0 on both splits): the rule learns from the contrast between
-good and bad outcomes, and a memory of wins alone removes it.
-
-**A diagnostic probe, not a result (2026-09-18 22:45–23:30).** To learn whether the
-+0.39 least-squares ceiling would even *win*, the ceiling's own KC→MBON weights (fitted
-outside the brain on 980 archived fights, `scripts/fit_probe_weights.py`) were loaded
-into the same circuit with learning, sleep and saving off, under a separate fingerprint
-(`run.py --probe-weights`). Over 124 fights the fly survived longer (39 vs 25 decisions)
-but hit less (3.3 vs 5.9 per fight) and left the boss at 79–86% against the learned
-fly's 72%: it parried and backed off. The outcome label the whole offline toolkit scores
-against (hit within three steps = +1, damage = −1) is dominated by damage avoidance, so a
-perfect readout of it is a cautious fly, not a winning one. Two consequences: the
-offline "knowledge" score ranks rules by how well they predict that label, which is a
-proxy and not the objective, and the gap that matters is not rule vs ceiling but label
-vs winning. A second probe fitted to the aggression-weighted learning reward instead
-(held-out +0.46, the signal the fly actually chases) did the same over 120 fights:
-76–82% boss HP, 3.5–4.7 hits, no victory. Neither readout of this Kenyon code, fitted
-on 980 fights of data, plays better than the synapses the fly learned itself. The probe
-weights were discarded and the learned checkpoint restored. Two more in-brain levers were
-then measured and found empty: a conjunction code for attack × phase in the pattern cells
-(re-simulated KC ceiling +0.32–0.34 against +0.33 live; exact cell groups are worse), a
-wider mushroom body (1,536 / 2,048 Kenyon cells: +0.33 / +0.34), and a motor decoder
-that holds still when the winning pool is not executable instead of running the best
-executable one (live A/B, 315 vs 381 fights: 72.4% vs 72.2%, p = 0.87).
-
-**Throughput, measured rather than assumed.** SoulsGym resets by teleporting and
-rewriting health, not through the game's death reload: a reset is 1.6 s. The fight is
-~20 s of wall clock for ~25 decisions because the environment advances the game through
-animation-locked steps in game time, so `--game-speed` scales most of an episode. At 3x
-(the SoulsGym author's setting; the brain simulates a 100 ms step in ~33 ms) and with
-the between-fight replay paced to 2.5 s instead of 7, an episode takes 11.5 s instead of
-28 (`scripts/reset_timing.py`), about 300 episodes an hour.
-
-**Lesion controls** (`scripts/ablation.py`, mock arena, innate circuit, 10 episodes each):
-
-| condition | hits/ep | boss HP | idle | action mix |
-|---|---|---|---|---|
-| intact | 2.7 | 86% | 0% | advance 39, retreat 24, attack light 15 |
-| MBON output cut | 3.3 | 72% | 42% | advance 43, idle 42 |
-| descending pools deafened | 0.0 | 100% | 100% | idle 100 |
-| sensory afferents cut | 0.0 | 100% | 100% | idle 100 |
-| weights shuffled | 3.1 | 71% | 0% | strafe right 55, advance 23 |
-
-The behaviour depends on the circuit: without a path from brain to motor output, or
-without sensory input, the fly does nothing, and shuffling the wiring produces a
-different animal. This demonstrates dependence on the circuit, **not** that the
-biological wiring is better at the game — the shuffled circuit scores higher here.
+**Lesion controls** (`scripts/ablation.py`, mock arena, innate circuit): cutting the
+descending pools or the sensory afferents leaves the fly idle at 100% boss HP; cutting
+the MBON output leaves it advancing and idle; shuffling the wiring produces a different
+animal (strafe 55%). The behaviour depends on the circuit; this does not show that the
+biological wiring is better at the game.
 
 **What is innate and what is learned.** Innate, designed by us from MaleCNS cell types:
 the retina map, looming and object-size cells, telegraph time cells and attack-pattern
 cells, the compass ring, the looming→roll and hemifield→strafe reflexes, premotor
 cross-inhibition, the vigor gate and approach brake. Learned, and the only thing that
-is: the KC→MBON synapses, i.e. which action each sensory situation favours, through
-dopamine alone. The 3D view draws the model's neurons on the somata and skeletons of real
-MaleCNS neurons of the same cell types (`scripts/fetch_malecns.py`, CC-BY); that mapping
-is by type and is presentation, not a claim that the model neuron is that cell.
+is: the KC→MBON synapses, through dopamine alone. The 3D view draws the model's neurons
+on the somata and skeletons of real MaleCNS neurons of the same cell types
+(`scripts/fetch_malecns.py`, CC-BY); that mapping is by type and is presentation only.
 
-**Things that did not work, and what they cost to find out.**
-- Three bugs masked everything for the first ~400 episodes: the player heading convention
-  was 146° off (the retina saw the boss in the wrong place), the patched camera reset
-  rotated the character's body instead of the camera, and a per-compartment homeostatic
-  cap pinned five of eight compartments at exactly +53% so no experience could change
-  behaviour. Any result measured before those fixes is void.
-- Reweighting damage dealt (`--aggression 8`) alone: no effect while the cap bug was
-  live; after the fix it produced the first victory within 16 episodes.
-- Sleep replay alone (with the cap bug live): worse. More updates pressed harder against
-  the same wall.
-- Lengthening the credit trace (0.82 → 0.90) turned the fly into a parry turtle within 40
-  fights; shortening the eligibility trace (0.92 → 0.80) changed nothing; both were later
-  shown offline to make no difference.
-- Setting the synaptic tag only at decision time (the rule before accumulated it on every
-  compartment every step, blaming the cells active *after* an early roll) is right by the
-  unit test, improved dodge statistics for ~40 fights, and did not move the score.
-- Spike-frequency adaptation, the single change that most improved flybench's whole-brain
-  LIF models, stops this sub-circuit's calibration converging even at a quarter of the
-  published value. Implemented, tested, left off.
-- A day of per-step data was lost because the archive lived only in memory and each
-  restart overwrote the file; the run recorder (`flysoul/telemetry/recorder.py`) now
-  writes per-run folders, sleep memory persists across restarts, and restarts are
-  lossless.
+**What did not work, briefly.** Three bugs voided the first ~400 episodes (a 146° heading
+error, a camera reset that turned the body, a homeostatic cap that pinned five of eight
+compartments). Sleep replay alone made things worse; a longer credit trace made a parry
+turtle; a shorter eligibility trace changed nothing; decision-time synaptic tagging is
+right by the unit test and did not move the score; spike-frequency adaptation breaks the
+calibration; replaying only the best fights removes the contrast the rule learns from.
+A day of per-step data was lost to an in-memory archive; the run recorder now makes every
+restart lossless.
 
-## 🧪 3b — a synthetic readout, kept apart (from 2026-09-19)
+### 3b, synthetic: from 6% to 32% wins in a day
 
-After every measurable lever inside the brain came back empty, the project added one
-thing that is **not** the fly's learning and is labelled as such everywhere: a linear Q
-function over the fly's own Kenyon cell code, fitted *outside the brain* by least-squares
-Q-iteration on the archived fights (`scripts/fit_q_readout.py`, `flysoul/synthetic/`),
-and run live with `run.py --synthetic-q`. When it is on, it chooses the action; the
-biological circuit still produces the sensory code, its learned synapses are loaded only
-to report how often the two agree, and are never updated or saved. Such runs carry the
-fingerprint `3b`, have their own learning curve, and show a magenta "3b · SYNTHETIC
-READOUT" card in the visualizer. Results from 3b runs are reported separately from the
-fly's, and never in the victory table above. First readout: fitted on 1,670 fights,
-γ 0.90, Bellman RMSE 0.26 held-out, agrees with the fly's own choice on 31% of steps.
-It is refitted every ~150 fights on all data including its own. Rounds so far (boss HP
-left): 72%, 70%, 70%, 67.5%; the fourth round beats the fly's own plateau for the first
-time (67.5% vs 72.2% over 157 vs 381 fights, p = 0.005, 6.7 vs 5.7 hits). Two victories
-under the synthetic readout (episode 12 of round 1b, 115 steps, 3% HP; episode 22 of
-round 4, 80 steps, a mutual kill) are listed here, not above. The Kenyon-only linear
-readout converged at ~68% over rounds 4–6. Round 7 replaced the Kenyon code with the
-binned raw game state (`flysoul/synthetic/features.py`, 366 one-hot features: attack ×
-phase, distance, angle, health, previous action): 65.8% over 150 fights, 6.9 hits, twice
-the survival (51 decisions), a third synthetic victory; +6.3 points over the fly
-(p = 0.0002) and +2.6 over the Kenyon-only readout (p = 0.20, not yet significant).
-Round 8, refitted with round 7's own fights: 54.6% boss HP, 9.1 hits, 52 decisions, one
-more synthetic victory; +17.5 points over the fly and +11.4 over round 7 (both p < 10⁻⁴).
-The synthetic readout learns from the same data volume the fly had; what differs is the
-objective (Q-iteration), the batch fit, and the raw state. Rounds 9 and 10 (59.6%, 55.6%;
-8–9 hits; five more synthetic victories, about one per 60 fights) suggest the linear
-raw-state readout plateaus around 55–60% boss HP. Rounds 11–12: 56.0% and 53.8%, 9 hits,
-four more synthetic victories (now one in about 50 fights; the best left the fly at 46% HP).
-Round 15 added the player's stamina to the state and cut exploration to ε = 0.02: 50.6% boss
-HP, 9.8 hits and nine victories in 154 fights (one in 17; the cleanest left the fly at 73%
-HP). A two-layer network on the same features (round 14) was not better than the linear
-readout, and the training horizon (γ 0.90 vs 0.95) made no difference.
+After the in-brain levers were exhausted, the project added one thing that is **not** the
+fly's learning and is labelled as such everywhere: a synthetic action chooser fitted
+*outside the brain* on the archived fights and run live with `run.py --synthetic-q`.
+The biological circuit still runs and produces its sensory code; its synapses are frozen
+and never saved; such runs carry the fingerprint `3b`, have their own learning curve,
+show a magenta "3b · SYNTHETIC" card, and a magenta network block drawn outside the
+brain in the 3D view. Nothing from these runs enters the fly's table above.
 
-**Rounds 19–25: from 6% to 28% wins.** Splitting the roll into four directional actions
-(round 19) lowered boss HP to 48% without changing the win rate. Replacing least-squares
-Q-iteration with an offline Double-DQN (`scripts/fit_q_dqn.py`: 256×256 network, n-step
-returns, target network, one-hot plus smooth state, 12 actions; rounds 20–24) took boss HP
-to 31–37% and wins to 10–17%. Adding the outcome itself to the fitted reward (+1 for a
-won fight's last step, −1 for a lost one; round 25) changed the play from trading to
-finishing: **28 victories in 100 fights**, 13 hits and ~90 decisions per fight, parry in
-use for the first time. Every refit uses all archived fights including the readout's own.
-A larger outcome bonus (±2, round 27) was worse; cutting exploration to ε = 0.01 (round 29)
-gave **35 victories in 109 fights (32%)** at 26% boss HP left, the best round so far.
+| round | what changed | boss HP left | hits | wins |
+|---|---|---|---|---|
+| 1–6 | linear Q-iteration on the **Kenyon code** (`fit_q_readout.py`) | 72% → 68% | 6.5 | 2 in ~900 |
+| 7–12 | same, on the **raw game state** (attack × phase, distance, angle, health, previous action) | 66% → 54% | 9 | ~1 in 50 |
+| 15 | + stamina in the state, ε 0.05 → 0.02 | 51% | 9.8 | 9 in 154 |
+| 19 | rolls split into four **directional actions** (12 actions) | 48% | 10.7 | 9 in 145 |
+| 20–24 | **offline Double-DQN** (`fit_q_dqn.py`: 256×256, n-step, target network) | 31–37% | 12.5 | 10–17% |
+| 25–26 | + outcome bonus in the fitted reward (**+1 win / −1 loss** on the last step) | 33% | 13 | **28 in 100**, 25 in 107 |
+| 27 | outcome bonus ±2 | 37% | 12 | 21 in 119 (worse, reverted) |
+| 29 | ε 0.02 → **0.01** | **26%** | 13.5 | **35 in 109 (32%)** |
+
+Every refit uses all archived fights including the readout's own; the improvement came
+from on-policy data as much as from the changes. Things that did not help here: a
+two-layer network on the Kenyon code, a longer training horizon (γ 0.95), the larger
+outcome bonus, and fitting on recent fights only.
+
+What the two tracks say together: the same sensory stream, the same action set and the
+same decision cadence support a 32%-win policy, so the game is not the limit. The fly's
+plastic synapses could not get there from the Kenyon code with a local three-factor rule
+and a hundred thousand samples; a network trained by batch RL on the raw state could.
 
 ## 🛠 Operating the live run
 
 - `scripts/supervise.sh` keeps the agent running; `touch STOP` stops it. Kill the agent
   with a pattern anchored to the process path (`pkill -f "^.../venv/bin/python run.py"`);
   an unanchored pattern matches the shell running the command.
-- Live flags since 20:20: `--game --continuous --explore --explore-temperature 1.5 --game-speed 3
-  --aggression 8 --learning-rate 0.02 --sleep-memory 50` (run.json in each run folder
-  records them).
+- The fly's flags: `--game --continuous --explore --explore-temperature 1.5 --game-speed 3
+  --aggression 8 --learning-rate 0.02 --sleep-memory 50 --sleep-save-every 5`. The 3b
+  track adds `--synthetic-q checkpoints/q_readout_3b.npz --synthetic-epsilon 0.01`;
+  `run.json` in each run folder records the flags and the fingerprint.
+- The 3b loop: every ~100 fights, merge the run's `archive.npz` into the training set
+  (`scripts/merge_archives.py`), refit (`scripts/fit_q_dqn.py <merged> --outer 8
+  --no-early-stop --terminal-bonus 1.0`), copy the model to `checkpoints/q_readout_3b.npz`
+  and restart; compare rounds with `scripts/trend.py <run>/episodes.jsonl --compare <prev>`.
 - Between-fight work: sleep replay runs in a thread while the game resets; the archive is
   written every 10 episodes, weights every 50, clips on victories and near misses
   (boss ≤ 10%).
