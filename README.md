@@ -419,6 +419,8 @@ to 31–37% and wins to 10–17%. Adding the outcome itself to the fitted reward
 won fight's last step, −1 for a lost one; round 25) changed the play from trading to
 finishing: **28 victories in 100 fights**, 13 hits and ~90 decisions per fight, parry in
 use for the first time. Every refit uses all archived fights including the readout's own.
+A larger outcome bonus (±2, round 27) was worse; cutting exploration to ε = 0.01 (round 29)
+gave **35 victories in 109 fights (32%)** at 26% boss HP left, the best round so far.
 
 ## 🛠 Operating the live run
 
