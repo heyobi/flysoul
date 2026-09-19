@@ -76,7 +76,13 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--wd", type=float, default=1e-5)
     ap.add_argument("--aggression", type=float, default=4.0)
+    ap.add_argument("--terminal-bonus", type=float, default=0.0,
+                    help="add +bonus to the last step of a won fight and -bonus to the last step of a lost one, "
+                         "so the network sees the outcome itself, not only the running damage balance")
     ap.add_argument("--patience", type=int, default=4)
+    ap.add_argument("--no-early-stop", action="store_true",
+                    help="keep the final network after --outer updates (Bellman error rises with the "
+                         "targets, so early stopping on it tends to stop at update 0)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
     torch.manual_seed(args.seed)
@@ -94,6 +100,13 @@ def main() -> int:
     term = z["terminal"].astype(bool).copy()
     last = (np.arange(n) + 1 >= n) | (np.roll(fid, -1) != fid)
     term |= last
+    if args.terminal_bonus > 0:
+        # a fight is won when its last step's hit brings the boss (as seen before the step) to zero
+        boss_hp = z["extra"][:, names.index("boss_hp")]
+        ends = np.flatnonzero(last)
+        won = (z["hit"][ends] > 0) & (boss_hp[ends] - z["hit"][ends] <= 0.02)
+        r[ends] += np.where(won, args.terminal_bonus, -args.terminal_bonus).astype(np.float32)
+        print(f"terminal bonus +/-{args.terminal_bonus}: {int(won.sum())} of {len(ends)} fights end in a win")
     ret, boot, disc = nstep_targets_info(r, term, fid, args.nstep, args.gamma)
     fights = np.unique(fid)
     train = np.isin(fid, fights[::2])
@@ -144,7 +157,9 @@ def main() -> int:
             tr_be = bellman(q, tq, idx)
             te_be = bellman(q, tq, test_idx) if test_idx is not None else tr_be
             print(f"  [{label}] update {outer:2d}: Bellman RMSE train {tr_be:.3f} test {te_be:.3f}  ({time.perf_counter() - t0:.0f}s)", flush=True)
-            if te_be < best[0] - 1e-4:
+            if args.no_early_stop:
+                best = (te_be, {k: v.clone() for k, v in q.state_dict().items()}, outer)
+            elif te_be < best[0] - 1e-4:
                 best = (te_be, {k: v.clone() for k, v in q.state_dict().items()}, outer)
                 bad = 0
             else:
@@ -152,7 +167,7 @@ def main() -> int:
                 if bad >= args.patience:
                     break
         q.load_state_dict(best[1])
-        print(f"  [{label}] best test Bellman {best[0]:.3f} at update {best[2]}")
+        print(f"  [{label}] kept update {best[2]} (test Bellman {best[0]:.3f})")
         return q, best[2]
 
     q, best_outer = run(train, "half")
@@ -164,13 +179,13 @@ def main() -> int:
     print(f"  agreement with executed (held-out): {np.mean(greedy[test] == a[test]):.0%}; "
           f"mean Q advantage of greedy over executed: {(Q[np.arange(n), greedy] - Q[np.arange(n), a])[test].mean():+.3f}")
     # final fit on everything, for as many updates as the held-out run found best (+1)
-    args.outer = max(1, best_outer + 1)
+    args.outer = args.outer if args.no_early_stop else max(1, best_outer + 1)
     args.patience = 10 ** 6
     q, _ = run(np.ones(n, dtype=bool), "all")
     layers = [m for m in q if isinstance(m, nn.Linear)]
     out = {"type": "mlp", "gamma": args.gamma, "actions": np.array(actions), "num_kc": 0,
            "aggression": args.aggression, "fights": len(fights), "steps": n, "features": args.features,
-           "nstep": args.nstep, "learner": "double-dqn"}
+           "nstep": args.nstep, "learner": "double-dqn", "terminal_bonus": args.terminal_bonus}
     for i, m in enumerate(layers, start=1):
         out[f"W{i}"] = m.weight.detach().numpy().astype(np.float32)
         out[f"b{i}"] = m.bias.detach().numpy().astype(np.float32)

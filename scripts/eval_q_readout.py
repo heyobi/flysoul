@@ -22,8 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flysoul.config import BioPhysicsConfig, CircuitConfig  # noqa: E402
 from flysoul.connectome.calibration import calibrate_or_load  # noqa: E402
 from flysoul.connectome.graph import ACTION_CHANNELS, build_fly_circuit  # noqa: E402
-from flysoul.synthetic.features import raw_features_from_archive  # noqa: E402
-from fit_q_readout import ACTIONS, features  # noqa: E402
+from flysoul.synthetic.features import cont_features_from_archive, raw_features_from_archive  # noqa: E402
+from flysoul.synthetic.actions import relabel_archive  # noqa: E402
+from fit_q_readout import features  # noqa: E402
 
 
 def load_model(path):
@@ -46,7 +47,8 @@ def load_model(path):
         W = b["W"].astype(np.float64)
         def q(X):
             return X.astype(np.float64) @ W.T
-    return q, spec, float(b["gamma"]), float(b["aggression"]) if "aggression" in b.files else 8.0
+    actions = [str(x) for x in b["actions"]]
+    return q, spec, float(b["gamma"]), float(b["aggression"]) if "aggression" in b.files else 8.0, actions
 
 
 def build_X(z, spec, kc):
@@ -55,6 +57,8 @@ def build_X(z, spec, kc):
     R = raw_features_from_archive(z)
     if spec == "raw":
         return np.hstack([R, np.ones((len(R), 1), np.float32)])
+    if spec == "raw+cont":
+        return np.hstack([R, cont_features_from_archive(z), np.ones((len(R), 1), np.float32)])
     return np.hstack([features(z["spikes"][:, kc]), R])
 
 
@@ -69,11 +73,9 @@ def main() -> int:
     topo = build_fly_circuit(cfg, seed=args.seed)
     calibrate_or_load(topo, cfg, bio, seed=args.seed)
     kc = topo.kenyon_indices
-    ch = z["channel"].astype(np.int64)
-    a = np.where(ch >= 0, ch, len(ACTION_CHANNELS))
     names = list(z["extra_names"])
     fid = z["fight"]
-    n = len(a)
+    n = len(fid)
     term = z["terminal"].astype(bool).copy()
     nxt = np.arange(n) + 1
     last = (nxt >= n) | (np.roll(fid, -1) != fid)
@@ -82,7 +84,8 @@ def main() -> int:
     print(f"archive {args.archive}: {n} steps, {len(np.unique(fid))} fights")
     cache = {}
     for m in args.model:
-        q, spec, gamma, aggr = load_model(m)
+        q, spec, gamma, aggr, ACTIONS = load_model(m)
+        a = relabel_archive(z, ACTIONS)
         if spec not in cache:
             cache[spec] = build_X(z, spec, kc)
         X = cache[spec]

@@ -411,6 +411,15 @@ HP, 9.8 hits and nine victories in 154 fights (one in 17; the cleanest left the 
 HP). A two-layer network on the same features (round 14) was not better than the linear
 readout, and the training horizon (γ 0.90 vs 0.95) made no difference.
 
+**Rounds 19–25: from 6% to 28% wins.** Splitting the roll into four directional actions
+(round 19) lowered boss HP to 48% without changing the win rate. Replacing least-squares
+Q-iteration with an offline Double-DQN (`scripts/fit_q_dqn.py`: 256×256 network, n-step
+returns, target network, one-hot plus smooth state, 12 actions; rounds 20–24) took boss HP
+to 31–37% and wins to 10–17%. Adding the outcome itself to the fitted reward (+1 for a
+won fight's last step, −1 for a lost one; round 25) changed the play from trading to
+finishing: **28 victories in 100 fights**, 13 hits and ~90 decisions per fight, parry in
+use for the first time. Every refit uses all archived fights including the readout's own.
+
 ## 🛠 Operating the live run
 
 - `scripts/supervise.sh` keeps the agent running; `touch STOP` stops it. Kill the agent
