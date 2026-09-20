@@ -169,6 +169,15 @@ from the readout, over a brain that was not participating.
 
 ## 📊 Live Telemetry Dashboard
 
+<p align="center">
+  <img src="media/flysoul_brain_sleep.gif" width="300" alt="The modelled circuit drawn on real MaleCNS neurons, spiking through a fight and then dreaming: sleep replay between fights"><br>
+  <sub>The circuit on real MaleCNS somata and skeletons: spikes during a fight, then the sleep phase (replay of remembered fights through the same dopamine plasticity). Recorded from the visualizer's replay mode.</sub>
+</p>
+<p align="center">
+  <img src="media/flysoul_dashboard.gif" width="720" alt="The FlySoul dashboard: brain, live capture, boss fight, arena view and learning curve"><br>
+  <sub>The whole page; a static copy with a recorded fight runs on GitHub Pages: <a href="https://heyobi.github.io/flysoul/">heyobi.github.io/flysoul</a></sub>
+</p>
+
 FlySoul includes a terminal user interface powered by `rich`:
 
 ```
@@ -187,15 +196,15 @@ FlySoul includes a terminal user interface powered by `rich`:
 
 ---
 
-## 📈 Results (as of 2026-09-19, night)
+## 📈 Results (final, 2026-09-20)
 
 Two things were tried against Iudex Gundyr, and they are reported separately because
 they are different claims.
 
 | | what chooses the action | learns how | fights | victories | best 100-fight stretch |
 |---|---|---|---|---|---|
-| **The fly** | the MaleCNS-derived circuit's own descending pools | dopamine plasticity on KC→MBON synapses, inside the circuit | ~5,150 | **8** (0.16%) | boss left at 72%, 6 hits, 25 decisions |
-| **3b, synthetic** | a Q network fitted *outside* the brain on the archived fights | offline Double-DQN, refit every ~100 fights | 4,309 | **265** (6% overall; **32%** in the latest round) | boss left at 26%, 13 hits, 90 decisions, 35 wins in 109 |
+| **The fly** | the MaleCNS-derived circuit's own descending pools | dopamine plasticity on KC→MBON synapses, inside the circuit | ~5,200 | **8** (0.15%) | boss left at 72%, 6 hits, 25 decisions |
+| **3b, synthetic** | a Q network fitted *outside* the brain on the archived fights | offline Double-DQN, refit every ~100 fights | ~6,300 | **737** (12% overall; **28–32%** over the last 1,800 fights) | boss left at 22%, 14 hits, 95 decisions, 29 wins in 97 |
 
 The first line is the project's question and its honest answer: the fly circuit can beat
 the boss, and does so about once in six hundred fights, but it does not *learn to beat
@@ -308,7 +317,9 @@ brain in the 3D view. Nothing from these runs enters the fly's table above.
 | 20–24 | **offline Double-DQN** (`fit_q_dqn.py`: 256×256, n-step, target network) | 31–37% | 12.5 | 10–17% |
 | 25–26 | + outcome bonus in the fitted reward (**+1 win / −1 loss** on the last step) | 33% | 13 | **28 in 100**, 25 in 107 |
 | 27 | outcome bonus ±2 | 37% | 12 | 21 in 119 (worse, reverted) |
-| 29 | ε 0.02 → **0.01** | **26%** | 13.5 | **35 in 109 (32%)** |
+| 29 | ε 0.02 → **0.01** | 26% | 13.5 | **35 in 109 (32%)** |
+| 31 | same network, left running overnight | 28% | 13 | **410 in 1,483 (27.6%)**, flat (slope 0.0 ± 0.3) |
+| 32 | refit with the overnight fights | **22%** | 14.4 | 29 in 97 (30%) |
 
 Every refit uses all archived fights including the readout's own; the improvement came
 from on-policy data as much as from the changes. Things that did not help here: a
@@ -316,9 +327,19 @@ two-layer network on the Kenyon code, a longer training horizon (γ 0.95), the l
 outcome bonus, and fitting on recent fights only.
 
 What the two tracks say together: the same sensory stream, the same action set and the
-same decision cadence support a 32%-win policy, so the game is not the limit. The fly's
+same decision cadence support a 30%-win policy, so the game is not the limit. The fly's
 plastic synapses could not get there from the Kenyon code with a local three-factor rule
 and a hundred thousand samples; a network trained by batch RL on the raw state could.
+
+## 📦 Models and recordings
+
+- `models/fly_learned_synapses_07bdec337f23f86c.npz` — the fly's learned KC→MBON synapses
+  (the checkpoint behind the eight victories; loads into the pattern-cell circuit).
+- `models/q_dqn_3b_final_r32.npz` — the final synthetic network (round 32, 30% wins, 22% boss
+  HP); `models/q_dqn_3b_r29.npz` — round 29 (32% wins). Run either with
+  `run.py --game --synthetic-q <file> --synthetic-epsilon 0.01`.
+- `media/` — the normal-speed victory clip and GIF; `docs/` — a static replay of the
+  visualizer (a recorded fly fight with its sleep phases), served with GitHub Pages.
 
 ## 🛠 Operating the live run
 
