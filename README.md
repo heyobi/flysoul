@@ -175,7 +175,7 @@ from the readout, over a brain that was not participating.
 </p>
 <p align="center">
   <img src="media/flysoul_dashboard.gif" width="720" alt="The FlySoul dashboard: brain, live capture, boss fight, arena view and learning curve"><br>
-  <sub>The whole page; a static copy with a recorded fight runs on GitHub Pages: <a href="https://heyobi.github.io/flysoul/">heyobi.github.io/flysoul</a></sub>
+  <sub>The whole page; a static copy with a recorded 3b fight (synthetic Q network shown in magenta beside the brain) runs on GitHub Pages: <a href="https://heyobi.github.io/flysoul/">heyobi.github.io/flysoul</a></sub>
 </p>
 
 FlySoul includes a terminal user interface powered by `rich`:
@@ -339,7 +339,8 @@ and a hundred thousand samples; a network trained by batch RL on the raw state c
   HP); `models/q_dqn_3b_r29.npz` — round 29 (32% wins). Run either with
   `run.py --game --synthetic-q <file> --synthetic-epsilon 0.01`.
 - `media/` — the normal-speed victory clip and GIF; `docs/` — a static replay of the
-  visualizer (a recorded fly fight with its sleep phases), served with GitHub Pages.
+  visualizer (a recorded 3b fight at normal speed, with the synthetic Q network drawn
+  beside the brain), served with GitHub Pages.
 
 ## 🛠 Operating the live run
 
