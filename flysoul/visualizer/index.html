@@ -495,7 +495,13 @@ let skelLines = null, skelColors = null, skelRange = null, skelBase = null, skel
 let selectedFamily = null;
 let actionChannels = [];
 
-fetch('/api/topology').then(r => r.json()).then(build).catch(() => setLive(false, 'no topology'));
+// Replay mode: a static copy of the page (GitHub Pages) has no server. It plays a
+// recorded stream (scripts/record_stream.py) from ./replay/ instead: same brain, same
+// panels, a fight that already happened.
+const REPLAY = new URLSearchParams(location.search).has('replay') || location.protocol === 'file:' || /github\.io$/.test(location.hostname);
+const REPLAY_BASE = 'replay/';
+fetch(REPLAY ? REPLAY_BASE + 'topology.json' : '/api/topology').then(r => r.json()).then(build)
+  .catch(() => setLive(false, REPLAY ? 'no replay data' : 'no topology'));
 
 function build(data) {
   if (!data.coords) return;
@@ -690,8 +696,14 @@ function feedTick(ok) {
   document.getElementById('nofeed').style.display = feedFails > 8 ? 'grid' : 'none';
   const idle = document.getElementById('feed-body').style.display === 'none' || document.hidden;
   const delay = idle ? 1000 : (ok ? 70 : 800);
+  if (REPLAY) {
+    replayFrame = (replayFrame + 1) % Math.max(1, replayFrameCount);
+    setTimeout(() => { img.src = REPLAY_BASE + 'frames/' + String(replayFrame).padStart(5, '0') + '.jpg'; }, idle ? 1000 : 500);
+    return;
+  }
   setTimeout(() => { img.src = '/api/frame.jpg?t=' + Date.now(); }, delay);
 }
+let replayFrame = 0, replayFrameCount = 0;
 feedTick(false);
 function setTab(t) {
   document.body.dataset.tab = t;
@@ -1026,11 +1038,7 @@ function updateSynth(sy) {
   } else synthLine.visible = false;
 }
 
-const src = new EventSource('/api/stream');
-src.onopen = () => setLive(true, 'live connectome');
-src.onerror = () => setLive(false, 'reconnecting');
-src.onmessage = e => {
-  const d = JSON.parse(e.data);
+function handleEvent(d) {
   if (d.type === 'sleep') { handleSleep(d); return; }
   const $ = id => document.getElementById(id);
   const pct = v => Math.round(v * 100) + '%';
@@ -1096,7 +1104,31 @@ src.onmessage = e => {
   updateArena(d);
 
   if (act && d.spikes) for (const i of d.spikes) if (i < N) act[i] = 1;
-};
+}
+
+if (!REPLAY) {
+  const src = new EventSource('/api/stream');
+  src.onopen = () => setLive(true, 'live connectome');
+  src.onerror = () => setLive(false, 'reconnecting');
+  src.onmessage = e => handleEvent(JSON.parse(e.data));
+} else {
+  // play the recorded stream on its own clock, looping; nothing here is live
+  fetch(REPLAY_BASE + 'manifest.json').then(r => r.json()).then(m => { replayFrameCount = m.frames || 0; }).catch(() => {});
+  fetch(REPLAY_BASE + 'events.jsonl').then(r => r.text()).then(txt => {
+    const evs = txt.split(String.fromCharCode(10)).filter(Boolean).map(l => JSON.parse(l));
+    if (!evs.length) { setLive(false, 'empty replay'); return; }
+    setLive(true, 'replay · a recorded fight, not live');
+    const note = document.getElementById('dataset-note');
+    let i = 0, t0 = performance.now();
+    const tick = () => {
+      const now = (performance.now() - t0) / 1000;
+      while (i < evs.length && evs[i].t <= now) { try { handleEvent(evs[i].e); } catch (err) {} i++; }
+      if (i >= evs.length) { i = 0; t0 = performance.now(); }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  }).catch(() => setLive(false, 'no replay data'));
+}
 
 // =============================================================================
 // Frame loop: decay activity, light the axons of cells that just fired.
