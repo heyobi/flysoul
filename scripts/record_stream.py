@@ -1,7 +1,7 @@
 """Record the visualizer's live event stream and topology to static files, for a replay
 that needs no server (GitHub Pages).
 
-    python scripts/record_stream.py http://192.168.2.118:8080 docs/replay --seconds 120
+    python scripts/record_stream.py http://<game-host>:8080 docs/replay --seconds 120
 
 Writes <out>/topology.json (the /api/topology payload, with real MaleCNS coordinates and
 skeletons) and <out>/events.jsonl (one SSE event per line with a relative timestamp), plus

@@ -70,7 +70,7 @@ While other researchers gave the fly a shotgun in *Doom* or let it trade Bitcoin
 Requires **Python 3.11+**:
 
 ```bash
-git clone https://github.com/flysoul/flysoul.git
+git clone https://github.com/heyobi/flysoul.git
 cd flysoul
 pip install -r requirements.txt
 ```

@@ -108,7 +108,7 @@ episodes before the discrepancy surfaced. Before adding a reward term here, read
 
 The project is structured to run across two connected machines:
 
-1. **Host Machine (`ibox@ziverbey` - HP Pavilion 15-cb0xx):**
+1. **Host Machine (the Linux game host - HP Pavilion 15-cb0xx):**
    * **GPU:** NVIDIA GeForce GTX 1050 Mobile 2GB (Driver `580.178.04`, CUDA 13.0).
    * **OS:** Ubuntu 24.04 LTS (Kernel 6.8.0).
    * **Role:** Runs *Dark Souls III* under Proton Experimental + Sunshine NVENC streaming server + SoulsGym memory agent (`DISPLAY=:0`).
@@ -174,7 +174,7 @@ flysoul/
 python run.py --episodes 10 --explore --no-web
 ```
 
-### Mode B: Live Game with Dark Souls III (On `ziverbey`)
+### Mode B: Live Game with Dark Souls III (on the game host)
 
 1. Ensure Dark Souls III is running in Windowed mode (800x450) and Offline mode.
 2. Launch:
